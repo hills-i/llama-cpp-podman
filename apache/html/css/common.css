@@ -1,0 +1,228 @@
+/* common.css - shared styles for proofread.html and reply-local.html */
+:root {
+    --primary-color: #5D5CDE;
+    --bg-color: #eefbff;
+    --textbox-color: #ffffff;
+    --text-color: #333333;
+    --border-color: #e2e8f0;
+    --hover-color: #f8fafc;
+    --warning-bg: #fffbeb;
+    --warning-text: #92400e;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-color: #1a1a1a;
+        --text-color: #e2e8f0;
+        --textbox-color: #2d2d2d;
+        --border-color: #4b5563;
+        --hover-color: #272727;
+        --warning-bg: #453a16;
+        --warning-text: #fef08a;
+    }
+    .dark-mode {
+        background-color: var(--bg-color);
+        color: var(--text-color);
+    }
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 16px;
+    line-height: 1.5;
+}
+
+.main-grid {
+    display: grid;
+    grid-template-columns: 230px 1fr;
+    min-height: 100vh;
+}
+
+.container {
+    margin: 20px 100px;
+    width: auto;
+}
+
+.textbox-container {
+    background-color: var(--textbox-color);
+}
+
+h1 {
+    text-align: center;
+    color: var(--primary-color);
+    font-size: 24px;
+    margin-bottom: 24px;
+}
+
+.warning-box {
+    background-color: var(--warning-bg);
+    color: var(--warning-text);
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+    font-size: 14px;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+input, select, textarea, button {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-size: 16px;
+    box-sizing: border-box;
+}
+
+input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+button {
+    background-color: var(--primary-color);
+    color: white;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+    border: none;
+}
+
+button:hover {
+    background-color: rgba(93, 92, 222, 0.9);
+}
+
+button:disabled {
+    background-color: #a0a0a0;
+    cursor: not-allowed;
+}
+
+.response-container {
+    margin-top: 20px;
+}
+
+.response-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.response-title {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.btn-group {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-small {
+    width: auto;
+    padding: 4px 12px;
+    font-size: 14px;
+    background-color: #e2e8f0;
+    color: var(--text-color);
+}
+
+.btn-small:hover {
+    background-color: #cbd5e1;
+}
+
+@media (prefers-color-scheme: dark) {
+    .btn-small {
+        background-color: #374151;
+    }
+    .btn-small:hover {
+        background-color: #4b5563;
+    }
+}
+
+.response-box {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    min-height: 160px;
+    background-color: var(--textbox-color);
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 16px;
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(93, 92, 222, 0.3);
+    border-radius: 50%;
+    border-top-color: var(--primary-color);
+    animation: spin 1s ease-in-out infinite;
+}
+
+.hidden {
+    display: none;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.error-text {
+    color: #ef4444;
+}
+
+.sidemenu {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 16px;
+    min-width: 200px;
+    background: #f8fafc;
+    border-right: 1px solid var(--border-color);
+    height: 100vh;
+    position: sticky;
+    top: 0;
+}
+
+.sidemenu a {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+    padding: 8px 0;
+    transition: color 0.2s;
+}
+
+.sidemenu a:hover {
+    color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+    .sidemenu {
+        background: #23272f;
+    }
+    .sidemenu a {
+        color: #a5b4fc;
+    }
+    .sidemenu a:hover {
+        color: #fff;
+    }
+}

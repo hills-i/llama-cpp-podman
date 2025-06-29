@@ -1,0 +1,24 @@
+apache/certs/
+apache/conf/.htpasswd
+apache/logs/*
+models/*
+venv
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bk
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.env
+ehthumbs.db
+Thumbs.db
+
