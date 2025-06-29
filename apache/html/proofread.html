@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>English Email Checker</title>
+    <link rel="stylesheet" href="css/common.css">
+    <script src="js/model-list.js"></script>
+    <script src="js/ui.js"></script>
+</head>
+<body>
+    <div class="main-grid">
+        <div class="sidemenu">Side Menu</div>
+        <div class="container">
+            <h1>English Email Checker</h1>
+            <div class="form-group">
+                <label for="model">Model</label>
+                <select id="model">
+                    <option>
+                        Loading models...
+                    </option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="prompt">Email to check</label>
+                <textarea id="prompt" class="textbox-container" rows="12" placeholder="Please enter your email here...">
+Dear Dr. Smith,
+
+I hope this email finds you well. I am writing to follow up on our previous discussion regarding the upcoming project deadline.
+
+Best regards,
+James</textarea>
+                <button id="submitBtn">Submit</button>
+            </div>
+            <div class="response-container">
+                <div class="response-header">
+                    <div class="response-title">
+                        Check Results
+                    </div>
+                    <div class="btn-group">
+                        <button id="copyBtn" class="btn-small hidden">Copy</button>
+                        <button id="clearBtn" class="btn-small">Clear</button>
+                    </div>
+                </div>
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                </div>
+                <div id="response" class="response-box"></div>
+            </div>
+            <p><strong>1. Score of the original email</strong><br>
+            <p>        Evaluate the original email for accuracy, naturalness, politeness, and clarity on a scale of 1 to 10. Aim for a score of 7 or higher.</p>
+            <p><strong>2. The original email is acceptable?</strong></p>
+            <p>        It will be judged whether it is suitable for a business email. Aim for "Yes".</p>
+            <p><strong>3. Proofread email </strong></p>
+            <p>        If there are any parts that should be changed, a proofread version will be created.</p>
+            <p><strong>4. Changes from original email to proofread one</strong></p>
+            <p>        The changes made in step 3 will be described here.</p>
+        </div>
+    </div>
+    <script>
+        loadSideMenu(); 
+        const prompt_template_1 = `
+# Role
+English email proofreader
+
+# Task  
+Review {Mail draft} to ensure the following:
+
+1. Correctness: Check for grammar, punctuation, and spelling errors.
+2. Naturalness: Ensure the language flows smoothly and feels natural to native speaker.
+3. Politeness: Confirm that the tone is polite, respectful and appropriate for professional correspondence.
+4. Clarity: Check the clarity of the email.
+
+Make revisions as needed, but retain the intended meaning and context.
+  
+# Context  
+A business mail.  
+The email will be sent to a non-English native. Use clear and simple language that is easily understandable.
+  
+# Mail draft  
+\`\`\`
+`;
+
+        const prompt_template_2 = `
+\`\`\`
+# Output format
+The results of evaluating the original email  about tolerance for acceptable business email on a scale of 1 to 10 for the followings. The passing mark is 6.  
+
+Crrectness score:
+Naturalness score:
+Politeness score:
+Clarity score:
+  
+Whether the original email is acceptable to send as business email (Answer yes or no) :
+Proofread email (if there are any) :  
+Changes (if there are any) :
+<no_think>
+`;
+        initProofreadUI(prompt_template_1, prompt_template_2);
+    </script>
+</body>
+</html>

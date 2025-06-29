@@ -1,0 +1,39 @@
+services:
+  apache:
+    image: docker.io/library/httpd:latest
+    ports:
+      - "8443:443"
+      - "8080:80"
+    volumes:
+      - ./apache/conf:/usr/local/apache2/conf:Z
+      - ./apache/logs:/usr/local/apache2/logs:Z
+      - ./apache/certs:/usr/local/apache2/certs:Z
+      - ./apache/html:/var/www/html:Z
+    environment:
+      - APACHE_LOG_DIR=/usr/local/apache2/logs
+    networks:
+      - internal
+      - frontend
+  llama-cpp-server:
+    container_name: llama-cpp-server
+    image: ghcr.io/ggml-org/llama.cpp:server
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./models:/models
+    # Set MODEL_FILE to the actual model file you have in ./models
+    environment:
+      - MODEL_FILE=/models/model.gguf  # <-- Set this to your actual model file
+    command: >
+      -m ${MODEL_FILE}
+      --port 11434
+      --host 0.0.0.0
+      -n 512
+    networks:
+      - internal
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  frontend:
+    driver: bridge
