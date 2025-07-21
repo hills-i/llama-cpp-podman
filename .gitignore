@@ -4,6 +4,10 @@ apache/logs/*
 models/*
 venv
 
+rag-service/data/chroma_db/*
+rag-service/documents/*
+rag-service/models/*
+
 # Editor directories and files
 .vscode/
 .idea/
@@ -22,3 +26,5 @@ venv
 ehthumbs.db
 Thumbs.db
 
+CLAUDE.md
+rag-service/README-RAG.md

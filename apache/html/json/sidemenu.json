@@ -4,4 +4,10 @@
 }, {
     "href": "reply.html",
     "label": "English Email Reply Draft Creation"
+}, {
+    "href": "rag.html",
+    "label": "RAG - Document Q&A"
+}, {
+    "href": "rag-chat.html",
+    "label": "RAG Chat - Continuous Conversation"
 }]

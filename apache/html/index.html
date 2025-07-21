@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>llama.cpp + RAG System</title>
+    <link rel="stylesheet" href="css/common.css">
+    <style>
+        .hero-section {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .hero-title {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--primary-color), #8B7CF6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: 20px;
+            color: #666;
+            margin-bottom: 32px;
+        }
+
+        .status-banner {
+            background: var(--textbox-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #10B981;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-indicator.warning {
+            background: #F59E0B;
+        }
+
+        .status-indicator.error {
+            background: #EF4444;
+        }
+
+        .refresh-btn {
+            width: auto;
+            padding: 8px 16px;
+            font-size: 14px;
+            margin: 0;
+        }
+
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+            margin-bottom: 48px;
+        }
+
+        .menu-card {
+            background: var(--textbox-color);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .menu-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(93, 92, 222, 0.15);
+            border-color: var(--primary-color);
+        }
+
+        .menu-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary-color), #8B7CF6);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .menu-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .card-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            display: block;
+        }
+
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--primary-color);
+        }
+
+        .card-description {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .card-features {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .footer-section {
+            text-align: center;
+            padding: 32px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 48px;
+        }
+
+        .footer-info {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 16px;
+        }
+
+        .tech-stack {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .tech-badge {
+            background: var(--border-color);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        @media (max-width: 768px) {
+            .hero-title {
+                font-size: 36px;
+            }
+            
+            .hero-subtitle {
+                font-size: 18px;
+            }
+
+            .menu-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .status-banner {
+                flex-direction: column;
+                gap: 12px;
+                text-align: center;
+            }
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Hero Section -->
+        <div class="hero-section">
+            <h1 class="hero-title">🦙 llama.cpp + RAG System</h1>
+            <p class="hero-subtitle">High-performance LLM inference with Retrieval-Augmented Generation</p>
+        </div>
+
+        <!-- System Status -->
+        <div class="status-banner">
+            <div class="status-info">
+                <div class="status-indicator" id="status-indicator"></div>
+                <span id="status-text">Checking system status...</span>
+            </div>
+            <button class="refresh-btn" id="refresh-status">🔄 Refresh</button>
+        </div>
+
+        <!-- Main Menu -->
+        <div class="menu-grid">
+            <a href="proofread.html" class="menu-card">
+                <div class="card-icon">📝</div>
+                <div class="card-title">English Email Checker</div>
+                <div class="card-description">
+                    Professional email proofreading and grammar correction using advanced LLM capabilities.
+                </div>
+                <div class="card-features">• Grammar check • Style improvement • Professional tone</div>
+            </a>
+
+            <a href="reply.html" class="menu-card">
+                <div class="card-icon">✉️</div>
+                <div class="card-title">Email Reply Generator</div>
+                <div class="card-description">
+                    Generate professional email responses with contextual understanding and appropriate tone.
+                </div>
+                <div class="card-features">• Context-aware • Multiple tones • Draft generation</div>
+            </a>
+
+            <a href="rag.html" class="menu-card">
+                <div class="card-icon">📚</div>
+                <div class="card-title">RAG - Document Q&A</div>
+                <div class="card-description">
+                    Ask questions about your uploaded documents using Retrieval-Augmented Generation.
+                </div>
+                <div class="card-features">• Document upload • Semantic search • Source citations</div>
+            </a>
+
+            <a href="rag-chat.html" class="menu-card">
+                <div class="card-icon">💬</div>
+                <div class="card-title">RAG Chat - Continuous Conversation</div>
+                <div class="card-description">
+                    Have ongoing conversations with your documents using advanced RAG capabilities.
+                </div>
+                <div class="card-features">• Conversation history • Context memory • Real-time chat</div>
+            </a>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer-section">
+            <div class="footer-info">
+                Powered by open-source technologies for secure, local AI processing
+            </div>
+            <div class="tech-stack">
+                <span class="tech-badge">llama.cpp</span>
+                <span class="tech-badge">ChromaDB</span>
+                <span class="tech-badge">LangChain</span>
+                <span class="tech-badge">FastAPI</span>
+                <span class="tech-badge">Apache HTTPD</span>
+                <span class="tech-badge">Podman</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/ui.js"></script>
+    <script>
+        // System status checking
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const refreshBtn = document.getElementById('refresh-status');
+
+        async function checkSystemStatus() {
+            try {
+                statusText.textContent = 'Checking...';
+                statusIndicator.className = 'status-indicator';
+                
+                // Check RAG service status
+                const ragResponse = await fetch('/rag/status');
+                const ragStatus = await ragResponse.json();
+                
+                // Check LLM service health
+                const llmResponse = await fetch('/health');
+                const llmHealthy = llmResponse.ok;
+                
+                if (ragStatus.llm_available && ragStatus.chain_ready && llmHealthy) {
+                    statusIndicator.className = 'status-indicator';
+                    statusText.textContent = `✅ All systems operational • ${ragStatus.vector_store.document_count || 0} documents loaded`;
+                } else if (ragStatus.chain_ready || llmHealthy) {
+                    statusIndicator.className = 'status-indicator warning';
+                    statusText.textContent = '⚠️ Partial system availability • Some features may be limited';
+                } else {
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = '❌ System unavailable • Please check service status';
+                }
+                
+            } catch (error) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = '❌ Unable to connect to services';
+                console.error('Status check error:', error);
+            }
+        }
+
+        // Event listeners
+        refreshBtn.addEventListener('click', checkSystemStatus);
+
+        // Initial status check
+        checkSystemStatus();
+
+        // Auto-refresh every 30 seconds
+        setInterval(checkSystemStatus, 30000);
+
+        // Add some interactive feedback
+        document.querySelectorAll('.menu-card').forEach(card => {
+            card.addEventListener('mouseenter', () => {
+                card.style.transform = 'translateY(-4px)';
+            });
+            
+            card.addEventListener('mouseleave', () => {
+                card.style.transform = 'translateY(0)';
+            });
+        });
+    </script>
+</body>
+</html>

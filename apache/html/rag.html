@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG - Document Q&A</title>
+    <link rel="stylesheet" href="css/common.css">
+</head>
+<body>
+    <div class="main-grid">
+      <div class="sidemenu">Side Menu</div>
+      <div class="container">
+        <h1>📚 RAG - Document Q&A</h1>
+        <p>Ask questions about your uploaded documents using Retrieval-Augmented Generation.</p>
+        <p><small>Supported formats: TXT, PDF, DOCX, JSON</small></p>
+        
+        <!-- Status Section -->
+        <div class="section">
+            <h3>System Status</h3>
+            <div id="status-info" class="status-container">
+                <span class="loading">Checking system status...</span>
+            </div>
+            <button id="refresh-status" class="btn secondary">Refresh Status</button>
+        </div>
+
+        <!-- Document Upload Section -->
+        <div class="section">
+            <h3>📁 Upload Documents</h3>
+            <p><small>Upload documents to add to the knowledge base. For JSON files, use format: <code>{"chunks": ["text1", "text2", ...]}</code></small></p>
+            <div class="upload-container">
+                <input type="file" id="file-input" multiple accept=".txt,.pdf,.docx,.json" class="file-input">
+                <button id="upload-btn" class="btn secondary">Upload Files</button>
+                <div id="upload-status" class="status-message"></div>
+            </div>
+        </div>
+
+        <!-- Query Section -->
+        <div class="section">
+            <h3>🤔 Ask Questions</h3>
+            <div class="input-group">
+                <textarea id="question-input" 
+                         placeholder="Ask a question about your documents..." 
+                         rows="3"></textarea>
+                <div class="controls">
+                    <label>
+                        <input type="checkbox" id="include-sources" checked> Include sources
+                    </label>
+                    <button id="ask-btn" class="btn primary">Ask Question</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Response Section -->
+        <div class="section" id="response-section" style="display: none;">
+            <h3>💡 Answer</h3>
+            <div id="response-content" class="response-box"></div>
+            <div class="response-controls">
+                <button id="copy-response" class="btn secondary hidden">Copy Answer</button>
+                <button id="clear-response" class="btn secondary">Clear</button>
+            </div>
+        </div>
+
+        <!-- Sources Section -->
+        <div class="section" id="sources-section" style="display: none;">
+            <h3>📄 Sources</h3>
+            <div id="sources-content" class="sources-container"></div>
+        </div>
+
+        <!-- Document Search Section -->
+        <div class="section">
+            <h3>🔍 Search Documents</h3>
+            <div class="input-group">
+                <input type="text" id="search-input" 
+                       placeholder="Search for relevant document chunks..." 
+                       class="search-input">
+                <button id="search-btn" class="btn secondary">Search</button>
+            </div>
+            <div id="search-results" class="search-results" style="display: none;"></div>
+        </div>
+
+        <div id="loading" class="loading hidden">Processing...</div>
+      </div>
+    </div>
+
+    <script src="js/ui.js"></script>
+    <script src="js/rag.js"></script>
+    <script>
+        loadSideMenu();
+    </script>
+</body>
+</html>

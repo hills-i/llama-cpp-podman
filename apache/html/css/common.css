@@ -226,3 +226,270 @@ button:disabled {
         color: #fff;
     }
 }
+
+/* RAG-specific styles */
+.section {
+    margin-bottom: 32px;
+    padding: 20px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background-color: var(--textbox-color);
+}
+
+.section h3 {
+    margin-top: 0;
+    margin-bottom: 16px;
+    color: var(--primary-color);
+    font-size: 18px;
+}
+
+.status-container {
+    margin-bottom: 16px;
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+
+.status-item {
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.status-item.success {
+    background-color: #dcfce7;
+    color: #166534;
+}
+
+.status-item.warning {
+    background-color: #fef3c7;
+    color: #92400e;
+}
+
+.status-item.error {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+.status-item.info {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+@media (prefers-color-scheme: dark) {
+    .status-item.success {
+        background-color: #052e16;
+        color: #bbf7d0;
+    }
+    .status-item.warning {
+        background-color: #451a03;
+        color: #fef3c7;
+    }
+    .status-item.error {
+        background-color: #450a0a;
+        color: #fecaca;
+    }
+    .status-item.info {
+        background-color: #172554;
+        color: #bfdbfe;
+    }
+}
+
+.upload-container {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.file-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.btn {
+    width: auto;
+    padding: 12px 24px;
+    margin: 0;
+}
+
+.btn.primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn.secondary {
+    background-color: #6b7280;
+    color: white;
+}
+
+.btn.secondary:hover {
+    background-color: #4b5563;
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.controls label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-weight: normal;
+}
+
+.controls input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.response-controls {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.sources-container {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.sources-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.source-item {
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--bg-color);
+}
+
+.source-header {
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+.source-content {
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.source-metadata {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.rerank-score {
+    font-size: 11px;
+    color: #059669;
+    background-color: #ecfdf5;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    font-weight: normal;
+}
+
+@media (prefers-color-scheme: dark) {
+    .rerank-score {
+        background-color: #064e3b;
+        color: #6ee7b7;
+    }
+}
+
+.search-input {
+    width: 100%;
+    margin-bottom: 0;
+}
+
+.search-results {
+    margin-top: 16px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.search-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.search-result-item {
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--bg-color);
+}
+
+.result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.similarity-score {
+    font-size: 12px;
+    color: #6b7280;
+    background-color: #f3f4f6;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .similarity-score {
+        background-color: #374151;
+        color: #d1d5db;
+    }
+}
+
+.result-content {
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.result-source {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.no-results {
+    text-align: center;
+    color: #6b7280;
+    font-style: italic;
+}
+
+.status-message {
+    margin-top: 12px;
+}
+
+.status-message .success {
+    color: #059669;
+}
+
+.status-message .error {
+    color: #dc2626;
+}
+
+.status-message .info {
+    color: #2563eb;
+}
