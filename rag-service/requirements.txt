@@ -1,0 +1,17 @@
+langchain==0.2.16
+langchain-community==0.2.16
+langchain-core==0.2.38
+chromadb==0.5.5
+transformers==4.44.0
+torch==2.4.0
+fastapi==0.114.0
+uvicorn==0.30.0
+python-multipart==0.0.9
+aiofiles==24.1.0
+pypdf==4.3.1
+python-docx==1.1.2
+requests==2.32.3
+numpy==1.26.4
+pandas==2.2.2
+tokenizers==0.19.1
+sentence-transformers==3.0.1

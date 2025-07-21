@@ -21,10 +21,10 @@ spec:
         # Set MODEL_FILE to the actual model file you have in ./models
         env:
         - name: MODEL_FILE
-          value: /models/model.gguf  # <-- Set this to your actual model file
+          value: /models/Qwen3-0.6B-Q8_0.gguf  # <-- Set this to your actual model file
         args:
         - -m
-        - ${MODEL_FILE}
+        - /models/Qwen3-0.6B-Q8_0.gguf
         - --port
         - "11434"
         - --host
@@ -65,7 +65,66 @@ spec:
     port: 11434
     targetPort: 11434
 ---
-# 3. apache Deployment
+# 3. rag-service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service-deployment
+  labels:
+    app: rag-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-service
+  template:
+    metadata:
+      labels:
+        app: rag-service
+    spec:
+      containers:
+      - name: rag-service
+        image: rag-service:latest
+        env:
+        - name: LLAMA_CPP_BASE_URL
+          value: "http://llama-cpp-server-service:11434"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: rag-documents
+          mountPath: /app/documents
+        - name: rag-data
+          mountPath: /app/data
+        - name: rag-models
+          mountPath: /app/models
+      volumes:
+      - name: rag-documents
+        hostPath:
+          path: ./rag-service/documents
+          type: Directory
+      - name: rag-data
+        hostPath:
+          path: ./rag-service/data
+          type: Directory
+      - name: rag-models
+        hostPath:
+          path: ./rag-service/models
+          type: Directory
+---
+# 4. rag-service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-service-service
+spec:
+  selector:
+    app: rag-service
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+---
+# 5. apache Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
