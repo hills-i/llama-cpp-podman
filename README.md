@@ -1,4 +1,4 @@
-# 🦙 llama.cpp System
+# 🦙 llama.cpp on Podman
 
 A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Features Apache HTTPD reverse proxy, ChromaDB vector store, and comprehensive security controls.
 
