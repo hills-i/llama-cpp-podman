@@ -21,7 +21,6 @@ A production-ready containerized setup for running **llama.cpp inference server*
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/yourusername/llama-cpp-rag.git
 cd llama-cpp-rag
 
 # Download embedding and reranker models
