@@ -122,10 +122,10 @@ function handleSubmit({
                 messages: [
                     { role: 'user', content: prompt }
                 ],
-                max_tokens: 300,
+                max_tokens: 2000,
                 stream: false
             };
-            const response = await fetch('https://localhost:8443/v1/chat/completions', {
+            const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -140,8 +140,6 @@ function handleSubmit({
             }
 
             let result = data.choices[0].message.content;
-            result = result.replace('<think>\n\n', '');
-            result = result.replace('</think>\n\n', '');
             result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
             result = result.replace(/```([\s\S]*?)```/g, (_, code) => `<blockquote>${code}</blockquote>`);
             responseDiv.innerHTML = result;

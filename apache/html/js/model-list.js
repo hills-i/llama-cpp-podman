@@ -2,7 +2,7 @@
 window.addEventListener('DOMContentLoaded', async () => {
     const modelSelect = document.getElementById('model');
     try {
-        const response = await fetch('https://localhost:8443/v1/models');
+        const response = await fetch('/v1/models');
         if (!response.ok) throw new Error('Failed to fetch models from API');
         const data = await response.json();
         if (data && data.data && Array.isArray(data.data)) {
