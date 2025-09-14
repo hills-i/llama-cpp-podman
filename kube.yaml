@@ -30,7 +30,7 @@ spec:
         - --host
         - 0.0.0.0
         - -n
-        - "1024"
+        - "4096"
        # --- CORRECTED LIVENESS PROBE ---
         livenessProbe:
           exec:
