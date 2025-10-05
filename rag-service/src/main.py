@@ -1,6 +1,8 @@
 """FastAPI application for RAG service."""
 
 import os
+import logging
+import uuid
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import uvicorn
@@ -12,6 +14,57 @@ from pydantic import BaseModel
 from .document_loader import DocumentProcessor, load_sample_documents
 from .vector_store import VectorStoreManager
 from .rag_chain import RAGChain
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Security configuration
+ALLOWED_DOCUMENT_PATHS = os.getenv(
+    "ALLOWED_DOCUMENT_PATHS",
+    "/app/documents,/tmp/rag_uploads"
+).split(",")
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "10"))
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+MAX_FILES_PER_UPLOAD = int(os.getenv("MAX_FILES_PER_UPLOAD", "10"))
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.docx', '.json'}
+
+MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+def validate_path(path: str) -> str:
+    """Validate path to prevent traversal attacks."""
+    real_path = os.path.realpath(os.path.abspath(path))
+
+    for allowed_base in ALLOWED_DOCUMENT_PATHS:
+        allowed_real = os.path.realpath(os.path.abspath(allowed_base))
+        if real_path.startswith(allowed_real):
+            logger.info(f"Path validated: {real_path}")
+            return real_path
+
+    logger.warning(f"Path traversal blocked: {path}")
+    raise HTTPException(
+        status_code=403,
+        detail="Access denied: path outside allowed directories"
+    )
+
+
+def sanitize_error(exc: Exception, error_id: str = None) -> dict:
+    """Sanitize error for safe client response."""
+    if error_id is None:
+        error_id = str(uuid.uuid4())[:8]
+
+    logger.error(f"Error {error_id}: {exc}", exc_info=True)
+
+    return {
+        "error": "Operation failed",
+        "error_id": error_id,
+        "message": "An error occurred. Contact support with error ID."
+    }
 
 
 # Pydantic models for API requests/responses
@@ -48,33 +101,23 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+# CORS: Allow all origins (already protected by Apache Basic Auth)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add error handling middleware
+# Global error handler - sanitize errors for security
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler to ensure JSON responses."""
-    import traceback
-    
-    # Log the error
-    print(f"Global exception: {str(exc)}")
-    print(f"Traceback: {traceback.format_exc()}")
-    
-    # Return JSON error response
+    """Global exception handler with error sanitization."""
+    error_response = sanitize_error(exc)
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": str(exc),
-            "type": "server_error"
-        }
+        content=error_response
     )
 
 # Global components
@@ -87,24 +130,24 @@ document_processor = DocumentProcessor()
 async def startup_event():
     """Initialize RAG components on startup."""
     global vector_store_manager, rag_chain
-    
-    print("Initializing RAG service...")
-    
+
+    logger.info("Initializing RAG service...")
+
     # Initialize vector store
     vector_store_manager = VectorStoreManager()
-    
+
     # Initialize RAG chain with reranker enabled
     rag_chain = RAGChain(vector_store_manager, use_reranker=True)
-    
+
     # Load sample documents if no documents exist
     collection_info = vector_store_manager.get_collection_info()
     if collection_info["document_count"] == 0:
-        print("No documents found, loading sample documents...")
+        logger.info("No documents found, loading sample documents...")
         sample_docs = load_sample_documents()
         vector_store_manager.add_documents(sample_docs)
-        print("Sample documents loaded")
-    
-    print("RAG service initialization complete")
+        logger.info("Sample documents loaded")
+
+    logger.info("RAG service initialization complete")
 
 
 @app.get("/", response_model=Dict[str, str])
@@ -173,21 +216,55 @@ async def upload_documents(files: List[UploadFile] = File(...)):
     """Upload documents to the knowledge base."""
     if not vector_store_manager:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
-    
+
+    # Validate file count
+    if len(files) > MAX_FILES_PER_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_FILES_PER_UPLOAD} files allowed per upload"
+        )
+
     # Create temporary directory for uploaded files
     upload_dir = Path("/tmp/rag_uploads")
     upload_dir.mkdir(exist_ok=True)
-    
+
     uploaded_files = []
-    
+    total_size = 0
+
     try:
-        # Save uploaded files
+        # Validate and save uploaded files
         for file in files:
+            # Check file extension
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File type {file_ext} not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+                )
+
+            # Read and validate file size
+            content = await file.read()
+            file_size = len(content)
+
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File {file.filename} exceeds {MAX_FILE_SIZE_MB}MB limit"
+                )
+
+            total_size += file_size
+            if total_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Total upload size exceeds {MAX_UPLOAD_SIZE_MB}MB limit"
+                )
+
+            # Save file
             file_path = upload_dir / file.filename
             with open(file_path, "wb") as buffer:
-                content = await file.read()
                 buffer.write(content)
             uploaded_files.append(str(file_path))
+            logger.info(f"Uploaded: {file.filename} ({file_size} bytes)")
         
         # Process documents
         documents = document_processor.process_directory(str(upload_dir))
@@ -225,12 +302,15 @@ async def ingest_directory(directory_path: str = Form(...)):
     """Ingest documents from a directory path."""
     if not vector_store_manager:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
-    
-    if not os.path.exists(directory_path):
-        raise HTTPException(status_code=400, detail=f"Directory {directory_path} does not exist")
-    
+
+    # Validate path to prevent traversal attacks
+    validated_path = validate_path(directory_path)
+
+    if not os.path.exists(validated_path):
+        raise HTTPException(status_code=400, detail="Directory does not exist")
+
     try:
-        documents = document_processor.process_directory(directory_path)
+        documents = document_processor.process_directory(validated_path)
         
         if documents:
             ids = vector_store_manager.add_documents(documents)

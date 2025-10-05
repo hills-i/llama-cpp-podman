@@ -24,14 +24,13 @@ services:
       - "11434:11434"
     volumes:
       - ./models:/models
-    # Set MODEL_FILE to the actual model file you have in ./models
-    environment:
-      - MODEL_FILE=/models/model.gguf  # <-- Set this to your actual model file
+    env_file:
+      - ./config/.env
     command: >
       -m ${MODEL_FILE}
       --port 11434
       --host 0.0.0.0
-      -n 512
+      -n 4096
     networks:
       - internal
   rag-service:
@@ -42,8 +41,11 @@ services:
     volumes:
       - ./rag-service/documents:/app/documents:Z
       - ./rag-service/data:/app/data:Z
+      - ./rag-service/models:/app/models:Z
     environment:
       - LLAMA_CPP_BASE_URL=http://llama-cpp-server:11434
+    env_file:
+      - ./config/.env
     networks:
       - internal
     depends_on:

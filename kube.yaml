@@ -1,3 +1,22 @@
+# 0. ConfigMap for environment variables (sync with config/.env)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-config
+data:
+  # Model Configuration
+  MODEL_FILE: /models/Qwen3-0.6B-Q8_0.gguf
+  EMBEDDING_MODEL_PATH: /app/models/embedding/Qwen3-Embedding-0.6B
+  RERANKER_MODEL_PATH: /app/models/reranker/bge-reranker-v2-m3
+  # File Upload Security Limits
+  MAX_FILE_SIZE_MB: "10"
+  MAX_UPLOAD_SIZE_MB: "50"
+  MAX_FILES_PER_UPLOAD: "10"
+  # Path Security
+  ALLOWED_DOCUMENT_PATHS: /app/documents,/tmp/rag_uploads
+  # Logging
+  LOG_LEVEL: INFO
+---
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -18,13 +37,12 @@ spec:
       containers:
       - name: llama-cpp-server
         image: ghcr.io/ggml-org/llama.cpp:server
-        # Set MODEL_FILE to the actual model file you have in ./models
-        env:
-        - name: MODEL_FILE
-          value: /models/Qwen3-0.6B-Q8_0.gguf  # <-- Set this to your actual model file
+        envFrom:
+        - configMapRef:
+            name: model-config
         args:
         - -m
-        - /models/Qwen3-0.6B-Q8_0.gguf
+        - $(MODEL_FILE)
         - --port
         - "11434"
         - --host
@@ -88,8 +106,22 @@ spec:
         env:
         - name: LLAMA_CPP_BASE_URL
           value: "http://llama-cpp-server-service:11434"
+        envFrom:
+        - configMapRef:
+            name: model-config
         ports:
         - containerPort: 8080
+#        resources:
+#          limits:
+#            memory: "4Gi"
+#            cpu: "2000m"
+#          requests:
+#            memory: "2Gi"
+#            cpu: "1000m"
+#        securityContext:
+#          runAsNonRoot: true
+#          runAsUser: 1000
+#          allowPrivilegeEscalation: false
         volumeMounts:
         - name: rag-documents
           mountPath: /app/documents

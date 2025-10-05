@@ -5,7 +5,7 @@ import json
 from typing import List, Optional
 from pathlib import Path
 
-from langchain.document_loaders import (
+from langchain_community.document_loaders import (
     DirectoryLoader,
     TextLoader,
     PyPDFLoader,
@@ -30,8 +30,16 @@ class DocumentProcessor:
     def load_json_document(self, file_path: str) -> List[Document]:
         """Load and process JSON documents."""
         documents = []
-        
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        MAX_CHUNKS = 1000
+
         try:
+            # Check file size before loading
+            file_size = os.path.getsize(file_path)
+            if file_size > MAX_FILE_SIZE:
+                print(f"JSON file too large: {file_path} ({file_size} bytes)")
+                return documents
+
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             

@@ -18,54 +18,53 @@ A production-ready containerized setup for running **llama.cpp inference server*
 - **8GB+ RAM** (for models + embeddings)
 - **Linux/macOS/Windows with WSL2**
 
-### 1. Clone and Setup
+### 1. Setup
 
 ```bash
-cd llama-cpp-rag
+# Create required directories
+mkdir -p apache/certs models rag-service/documents rag-service/data/chroma_db rag-service/models
 
-# Download embedding and reranker models
-./scripts/download-models.sh
+# Set SELinux context (if SELinux is enabled on RHEL/Fedora/CentOS)
+# chcon -Rt container_file_t ./rag-service/data/
+# chcon -Rt container_file_t ./apache/certs/
+# chcon -Rt container_file_t ./models/
 
 # Generate SSL certificates
-mkdir -p apache/certs
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout apache/certs/server.key \
   -out apache/certs/server.crt \
   -subj "/C=US/ST=State/L=City/O=Org/OU=Unit/CN=localhost"
-
-# Set proper permissions
 chmod 600 apache/certs/server.key
 chmod 644 apache/certs/server.crt
-```
 
-### 2. Add Your Model
-
-Place your GGUF model in the `models/` directory:
-
-```bash
-# Example: Download a model
+# Download your GGUF model to models/ directory
 wget https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf -O models/qwen2.5-0.5b-instruct-q8_0.gguf
 
-# Update configuration to point to your model
+# Download embedding and reranker models
+cd rag-service/models
+git clone https://huggingface.co/Qwen/Qwen3-Embedding-0.6B embedding
+git clone https://huggingface.co/BAAI/bge-reranker-v2-m3 reranker
+cd ../..
+
+# Update configuration
 sed -i 's|/models/Qwen3-0.6B-Q8_0.gguf|/models/qwen2.5-0.5b-instruct-q8_0.gguf|g' kube.yaml
 ```
 
-### 3. Start Services
+### 2. Start Services
 
 ```bash
-# Start with network isolation
+# Production mode (with network isolation)
 podman network create --internal isolated
 podman play kube --network isolated kube.yaml
 
-# Or start normally
+# Development mode (without isolation)
 podman play kube kube.yaml
 ```
 
-### 4. Examples
+### 3. Access Web Interface
 
-- 🌐 **Web Interface**: https://localhost:8443/html/index.html
-
-**Default Login**: `admin` / `llama123`
+🌐 **URL**: https://localhost:8443/html/index.html
+🔐 **Login**: `admin` / `llama123`
 
 ## 🏗️ Architecture
 
@@ -128,8 +127,56 @@ llama-cpp/
 │   └── README-RAG.md         # RAG-specific documentation
 └── 📚 Documentation
     ├── README.md             # This file
-    ├── CLAUDE.md             # Development guidance
     └── LICENSE
+```
+
+## 🛠️ Operations
+
+### Starting and Stopping Services
+
+```bash
+# Start services
+podman play kube kube.yaml
+
+# Start with network isolation (recommended for production)
+podman network create --internal isolated
+podman play kube --network isolated kube.yaml
+
+# Stop services
+podman play kube --down kube.yaml
+
+# Restart specific service
+podman restart rag-service-deployment-pod-rag-service
+podman restart llama-cpp-server-deployment-pod-llama-cpp-server
+```
+
+### Monitoring and Logs
+
+```bash
+# Container status
+podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Service logs
+podman logs -f llama-cpp-server-deployment-pod-llama-cpp-server
+podman logs -f rag-service-deployment-pod-rag-service
+podman logs -f apache-deployment-pod-apache
+
+# Health checks
+curl -k -u admin:llama123 https://localhost:8443/health
+curl -k -u admin:llama123 https://localhost:8443/rag/status
+```
+
+### Data Management
+
+```bash
+# Backup vector database
+tar -czf rag-backup-$(date +%Y%m%d).tar.gz rag-service/data/
+
+# Clear and rebuild vector store
+rm -rf rag-service/data/chroma_db/
+
+# View document stats
+curl -k -u admin:llama123 https://localhost:8443/rag/status | jq '.documents'
 ```
 
 ## ⚙️ Configuration
@@ -156,42 +203,6 @@ command: >
   -m ${MODEL_FILE}
 ```
 
-### Security Settings
-
-**Network Isolation (Recommended):**
-```yaml
-networks:
-  internal:
-    driver: bridge
-    internal: true  # No internet access
-```
-
-**Authentication Management:**
-```bash
-# Add new user
-python3 -c "
-import crypt
-username = 'newuser'
-password = 'securepass'
-encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-print(f'{username}:{encrypted}')
-" >> apache/conf/.htpasswd
-
-# Remove user
-sed -i '/^username:/d' apache/conf/.htpasswd
-```
-
-**Production CORS (rag-service/src/main.py):**
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://yourdomain.com"],  # Specify exact origins
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
-```
-
 ## 🧠 RAG System Deep Dive
 
 ### Pipeline Architecture
@@ -204,6 +215,15 @@ app.add_middleware(
 - **Embedding**: Qwen3-Embedding-0.6B (1024-dim, multilingual)
 - **Reranker**: BGE-reranker-v2-m3 (CrossEncoder, multilingual)
 - **LLM**: Your GGUF model via llama.cpp
+
+### Dependencies
+
+The RAG service uses LangChain 0.2.16+ with modular packages:
+- `langchain==0.2.16` - Core framework (auto-installs langchain-text-splitters)
+- `langchain-community==0.2.16` - Community integrations (document loaders, vector stores)
+- `langchain-core==0.2.38` - Base abstractions (documents, embeddings, prompts)
+
+All imports have been updated to use the new package structure to avoid deprecation warnings.
 
 ### API Reference
 
@@ -266,72 +286,29 @@ Response: {"choices": [...]}
 | **TXT** | ✅ Full | Plain text files |
 | **JSON** | ✅ Partial | Format: `{"chunks": ["text1", "text2"]}` |
 
-## 🛠️ Operations
+## 🔒 Security Configuration
 
-### Starting/Stopping Services
+### Development Environment
 
+**Default Settings:**
+- Self-signed SSL certificates
+- Basic authentication: `admin` / `llama123`
+- CORS: Allow all origins
+- Network: Internet access enabled
+
+### Production Hardening
+
+**1. SSL Certificates:**
 ```bash
-# Start all services
-podman play kube kube.yaml
-
-# Start with isolation
-podman network create --internal isolated
-podman play kube --network isolated kube.yaml
-
-# Stop services
-podman play kube --down kube.yaml
-
-# Restart specific service
-podman restart rag-service-deployment-pod-rag-service
-```
-
-### Monitoring and Logs
-
-```bash
-# Container status
-podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-# Service logs
-podman logs -f llama-cpp-server-deployment-pod-llama-cpp-server
-podman logs -f rag-service-deployment-pod-rag-service
-podman logs -f apache-deployment-pod-apache
-
-# Health checks
-curl -k -u admin:llama123 https://localhost:8443/health
-curl -k -u admin:llama123 https://localhost:8443/rag/status
-```
-
-### Data Management
-
-```bash
-# Backup vector database
-tar -czf rag-backup-$(date +%Y%m%d).tar.gz rag-service/data/
-
-# Clear and rebuild vector store
-rm -rf rag-service/data/chroma_db/
-# Upload documents via web interface or API
-
-# View document stats
-curl -k -u admin:llama123 https://localhost:8443/rag/status | jq '.documents'
-```
-
-## 🔒 Security Best Practices
-
-### For Development
-
-- ✅ Use self-signed certificates
-- ✅ Keep default credentials for testing
-- ✅ Enable all CORS origins for development
-
-### For Production
-
-```bash
-# 1. Use proper SSL certificates
+# Use proper certificates
 cp your-cert.crt apache/certs/server.crt
 cp your-key.key apache/certs/server.key
 chmod 600 apache/certs/server.key
+```
 
-# 2. Change default credentials
+**2. Authentication:**
+```bash
+# Change default password
 python3 -c "
 import crypt
 password = input('Enter secure password: ')
@@ -339,22 +316,43 @@ encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 print(f'admin:{encrypted}')
 " > apache/conf/.htpasswd
 
-# 3. Configure production CORS
-# Edit rag-service/src/main.py:
-# allow_origins=["https://yourdomain.com"]
-
-# 4. Enable network isolation
-podman network create --internal isolated
-podman play kube --network isolated kube.yaml
-
-# 5. Set up firewall
-sudo ufw allow 8443/tcp
-sudo ufw deny 8080/tcp  # Block HTTP
-sudo ufw deny 11434/tcp # Block direct LLM access
+# Add additional users
+python3 -c "
+import crypt
+username = 'newuser'
+password = 'securepass'
+encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
+print(f'{username}:{encrypted}')
+" >> apache/conf/.htpasswd
 ```
 
-### Security Checklist
+**3. CORS Configuration (rag-service/src/main.py):**
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://yourdomain.com"],  # Specific origins only
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+```
 
+**4. Network Isolation:**
+```bash
+# Create isolated network (no internet access)
+podman network create --internal isolated
+podman play kube --network isolated kube.yaml
+```
+
+**5. Firewall Rules:**
+```bash
+sudo ufw allow 8443/tcp   # HTTPS only
+sudo ufw deny 8080/tcp    # Block HTTP
+sudo ufw deny 11434/tcp   # Block direct LLM access
+sudo ufw deny 8081/tcp    # Block direct RAG access
+```
+
+**Security Checklist:**
 - [ ] SSL certificates with proper permissions (600 for .key)
 - [ ] Strong authentication credentials
 - [ ] CORS configured for specific origins
@@ -362,6 +360,74 @@ sudo ufw deny 11434/tcp # Block direct LLM access
 - [ ] Firewall rules configured
 - [ ] Regular security updates
 - [ ] Log monitoring enabled
+
+## 🌟 Advanced Usage
+
+### Custom Model Integration
+
+```bash
+# Add new model
+cp your-model.gguf models/
+# Update kube.yaml with model path
+sed -i 's|MODEL_FILE.*|MODEL_FILE=/models/your-model.gguf|g' kube.yaml
+# Restart services
+podman play kube --down kube.yaml
+podman play kube kube.yaml
+```
+
+### Bulk Document Processing
+
+```bash
+# Upload directory of documents
+for file in /path/to/docs/*; do
+    curl -k -u admin:llama123 -X POST https://localhost:8443/rag/upload \
+         -F "file=@$file"
+done
+
+# Or use the ingest endpoint for documents/ directory
+curl -k -u admin:llama123 -X POST https://localhost:8443/rag/ingest
+```
+
+### API Integration Examples
+
+<details>
+<summary>Python Client Example</summary>
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+class LlamaRAGClient:
+    def __init__(self, base_url="https://localhost:8443", username="admin", password="llama123"):
+        self.base_url = base_url
+        self.auth = HTTPBasicAuth(username, password)
+        self.session = requests.Session()
+        self.session.verify = False  # For self-signed certs
+
+    def query(self, question, include_sources=True):
+        response = self.session.post(
+            f"{self.base_url}/rag/query",
+            json={"question": question, "include_sources": include_sources},
+            auth=self.auth
+        )
+        return response.json()
+
+    def upload_document(self, file_path):
+        with open(file_path, 'rb') as f:
+            response = self.session.post(
+                f"{self.base_url}/rag/upload",
+                files={"file": f},
+                auth=self.auth
+            )
+        return response.json()
+
+# Usage
+client = LlamaRAGClient()
+result = client.query("What is machine learning?")
+print(result["answer"])
+```
+
+</details>
 
 ## 🚨 Troubleshooting
 
@@ -454,76 +520,11 @@ rm -rf rag-service/data/chroma_db/
 | **ChromaDB** | 1-2GB | 1+ core | SSD required | Vector operations |
 | **Apache** | 512MB | 1 core | - | Reverse proxy |
 
-**Tips:**
+**Optimization Tips:**
 - Use SSD for vector database performance
 - Increase `n_predict` for longer responses
 - Tune `temperature` for creativity vs consistency
 - Monitor memory usage during operation
-
-## 🌟 Advanced Usage
-
-### Custom Model Integration
-
-```bash
-# Add new model
-cp your-model.gguf models/
-# Update kube.yaml with model path
-sed -i 's|MODEL_FILE.*|MODEL_FILE=/models/your-model.gguf|g' kube.yaml
-```
-
-### Bulk Document Processing
-
-```bash
-# Upload directory of documents
-for file in /path/to/docs/*; do
-    curl -k -u admin:llama123 -X POST https://localhost:8443/rag/upload \
-         -F "file=@$file"
-done
-
-# Or use the ingest endpoint for documents/ directory
-curl -k -u admin:llama123 -X POST https://localhost:8443/rag/ingest
-```
-
-### API Integration Examples
-
-<details>
-<summary>Python Client Example</summary>
-
-```python
-import requests
-from requests.auth import HTTPBasicAuth
-
-class LlamaRAGClient:
-    def __init__(self, base_url="https://localhost:8443", username="admin", password="llama123"):
-        self.base_url = base_url
-        self.auth = HTTPBasicAuth(username, password)
-        self.session = requests.Session()
-        self.session.verify = False  # For self-signed certs
-        
-    def query(self, question, include_sources=True):
-        response = self.session.post(
-            f"{self.base_url}/rag/query",
-            json={"question": question, "include_sources": include_sources},
-            auth=self.auth
-        )
-        return response.json()
-    
-    def upload_document(self, file_path):
-        with open(file_path, 'rb') as f:
-            response = self.session.post(
-                f"{self.base_url}/rag/upload",
-                files={"file": f},
-                auth=self.auth
-            )
-        return response.json()
-
-# Usage
-client = LlamaRAGClient()
-result = client.query("What is machine learning?")
-print(result["answer"])
-```
-
-</details>
 
 ## 📄 License
 
