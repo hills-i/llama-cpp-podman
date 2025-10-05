@@ -1,26 +1,33 @@
-"""BGE-reranker-v2-m3 implementation using sentence-transformers."""
+"""Reranker implementation using sentence-transformers."""
 
 import os
+import logging
 from typing import List, Dict, Any, Tuple
 import numpy as np
 import torch
-from langchain.schema import Document
+from langchain_core.documents import Document
 from sentence_transformers import CrossEncoder
 
+logger = logging.getLogger(__name__)
 
-class BGEReranker:
-    """BGE-reranker-v2-m3 for multilingual document reranking using sentence-transformers."""
+
+class DocumentReranker:
+    """Document reranker for multilingual document reranking using sentence-transformers."""
     
-    def __init__(self, model_name: str = "/app/models/reranker/bge-reranker-v2-m3", 
+    def __init__(self, model_name: str = None,
                  device: str = "cpu", cache_dir: str = None):
         """
-        Initialize BGE reranker using sentence-transformers.
-        
+        Initialize reranker using sentence-transformers.
+
         Args:
-            model_name: HuggingFace model name
+            model_name: Path to local model or HuggingFace model name (uses RERANKER_MODEL_PATH env var if not provided)
             device: Device to run model on ('cpu' or 'cuda')
             cache_dir: Directory to cache the model
         """
+        # Use environment variable if model_name not provided
+        if model_name is None:
+            model_name = os.getenv("RERANKER_MODEL_PATH")
+
         self.model_name = model_name
         self.device = device
         
@@ -29,15 +36,15 @@ class BGEReranker:
             os.environ['TRANSFORMERS_CACHE'] = cache_dir
             
         try:
-            print(f"Loading reranker model: {model_name}")
+            logger.info(f"Loading reranker model: {model_name}")
             self.reranker = CrossEncoder(
                 model_name,
                 device=device,
                 trust_remote_code=True
             )
-            print("✅ Reranker model loaded successfully")
+            logger.info("✅ Reranker model loaded successfully")
         except Exception as e:
-            print(f"❌ Error loading reranker model: {e}")
+            logger.error(f"Error loading reranker model: {e}")
             self.reranker = None
     
     def is_available(self) -> bool:
@@ -47,7 +54,7 @@ class BGEReranker:
     def rerank(self, query: str, documents: List[Document], 
                top_k: int = 4) -> List[Document]:
         """
-        Rerank documents using BGE reranker.
+        Rerank documents using reranker.
         
         Args:
             query: Search query
@@ -58,7 +65,7 @@ class BGEReranker:
             List of reranked documents with scores in metadata
         """
         if not self.is_available():
-            print("⚠️ Reranker not available, returning original order")
+            logger.warning("Reranker not available, returning original order")
             return documents[:top_k]
         
         if not documents:
@@ -100,12 +107,12 @@ class BGEReranker:
                 })
                 
                 reranked_docs.append(new_doc)
-            
-            print(f"📊 Reranked {len(documents)} docs → top {len(reranked_docs)}")
+
+            logger.debug(f"Reranked {len(documents)} docs → top {len(reranked_docs)}")
             return reranked_docs
-            
+
         except Exception as e:
-            print(f"❌ Error during reranking: {e}")
+            logger.error(f"Error during reranking: {e}")
             # Fallback to original order
             return documents[:top_k]
     
@@ -131,14 +138,14 @@ class BGEReranker:
 class HybridRetriever:
     """Combines vector similarity search with reranking for improved accuracy."""
     
-    def __init__(self, vector_store_manager, reranker: BGEReranker = None,
+    def __init__(self, vector_store_manager, reranker: DocumentReranker = None,
                  retrieval_k: int = 10):
         """
         Initialize hybrid retriever.
-        
+
         Args:
             vector_store_manager: Vector store for initial retrieval
-            reranker: BGE reranker instance
+            reranker: Reranker instance
             retrieval_k: Number of documents to retrieve before reranking
         """
         self.vector_store_manager = vector_store_manager
@@ -160,26 +167,26 @@ class HybridRetriever:
         retrieval_count = max(self.retrieval_k, k * 2)
         
         # Initial vector similarity search
-        print(f"🔍 Vector search: retrieving {retrieval_count} candidates")
+        logger.debug(f"Vector search: retrieving {retrieval_count} candidates")
         documents = self.vector_store_manager.similarity_search(
             query, k=retrieval_count
         )
-        
+
         if not documents:
-            print("❌ No documents found in vector search")
+            logger.warning("No documents found in vector search")
             return []
-        
-        print(f"✅ Retrieved {len(documents)} documents from vector store")
-        
+
+        logger.debug(f"Retrieved {len(documents)} documents from vector store")
+
         # Apply reranking if available
         if self.reranker and self.reranker.is_available():
-            print(f"🎯 Reranking {len(documents)} documents")
+            logger.debug(f"Reranking {len(documents)} documents")
             final_docs = self.reranker.rerank(query, documents, top_k=k)
         else:
-            print("⚠️ No reranker available, using vector similarity order")
+            logger.debug("No reranker available, using vector similarity order")
             final_docs = documents[:k]
-        
-        print(f"📋 Final result: {len(final_docs)} documents")
+
+        logger.debug(f"Final result: {len(final_docs)} documents")
         return final_docs
     
     def retrieve_with_scores(self, query: str, k: int = 4) -> List[Tuple[Document, float]]:
@@ -197,17 +204,14 @@ class HybridRetriever:
 
 def get_reranker_info() -> Dict[str, Any]:
     """Get information about available reranker models."""
+    reranker_path = os.getenv("RERANKER_MODEL_PATH", "Local reranker model")
     return {
-        "current_model": "BAAI/bge-reranker-v2-m3",
+        "current_model": reranker_path,
         "description": "Multilingual reranker supporting 100+ languages",
         "features": [
             "Cross-encoder architecture",
             "Multilingual support (English, Chinese, Japanese, etc.)",
             "High accuracy for retrieval reranking",
             "Optimized for question-answering tasks"
-        ],
-        "alternatives": {
-            "bge-reranker-base": "Smaller, faster version",
-            "bge-reranker-large": "Larger, more accurate version"
-        }
+        ]
     }

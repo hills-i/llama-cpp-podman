@@ -3,6 +3,8 @@ apache/conf/.htpasswd
 apache/logs/*
 models/*
 venv
+backups/*
+scripts/*
 
 rag-service/data/chroma_db/*
 rag-service/documents/*
@@ -27,4 +29,7 @@ ehthumbs.db
 Thumbs.db
 
 CLAUDE.md
+SECURITY_CHECKLIST.md
+SECURITY_FIXES_SUMMARY.md
+SYSTEM_STATE.md
 rag-service/README-RAG.md

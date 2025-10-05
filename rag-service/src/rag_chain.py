@@ -3,29 +3,96 @@
 from typing import List, Dict, Any, Optional
 import requests
 import json
-from langchain.schema import Document
-from langchain.prompts import PromptTemplate
+import time
+import logging
+from threading import Lock
+from langchain_core.documents import Document
+from langchain_core.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-from langchain.llms.base import LLM
-from langchain.callbacks.manager import CallbackManagerForLLMRun
+from langchain_core.language_models.llms import LLM
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 
 from .vector_store import VectorStoreManager
-from .reranker import BGEReranker, HybridRetriever
+from .reranker import DocumentReranker, HybridRetriever
+
+logger = logging.getLogger(__name__)
+
+
+class RateLimiter:
+    """Simple rate limiter to prevent DoS attacks."""
+
+    def __init__(self, max_requests: int = 10, time_window: int = 60):
+        """
+        Initialize rate limiter.
+
+        Args:
+            max_requests: Maximum requests allowed in time window
+            time_window: Time window in seconds
+        """
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self.requests = []
+        self.lock = Lock()
+
+    def allow_request(self) -> bool:
+        """Check if request is allowed under rate limit."""
+        with self.lock:
+            now = time.time()
+            # Remove old requests outside time window
+            self.requests = [req for req in self.requests if now - req < self.time_window]
+
+            if len(self.requests) < self.max_requests:
+                self.requests.append(now)
+                return True
+            return False
+
+    def get_retry_after(self) -> int:
+        """Get seconds until rate limit resets."""
+        with self.lock:
+            if not self.requests:
+                return 0
+            oldest_request = min(self.requests)
+            return max(0, int(self.time_window - (time.time() - oldest_request)))
 
 
 class LlamaCppLLM(LLM):
-    """Custom LLM wrapper for llama.cpp server."""
-    
+    """Custom LLM wrapper for llama.cpp server with connection pooling."""
+
     base_url: str = "http://llama-cpp-server:11434"
-    
-    def __init__(self, base_url: str = "http://llama-cpp-server:11434"):
-        super().__init__()
-        self.base_url = base_url
-        
+
+    class Config:
+        """Pydantic config to allow arbitrary types."""
+        arbitrary_types_allowed = True
+
+    def __init__(self, base_url: str = "http://llama-cpp-server:11434", **kwargs):
+        super().__init__(base_url=base_url, **kwargs)
+        # Use object.__setattr__ to bypass Pydantic validation
+        object.__setattr__(self, '_session', self._create_session())
+
+    def _create_session(self) -> requests.Session:
+        """Create session with connection pooling and retry logic."""
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=retry_strategy
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
     @property
     def _llm_type(self) -> str:
         return "llama-cpp"
-    
+
     def _call(
         self,
         prompt: str,
@@ -39,71 +106,80 @@ class LlamaCppLLM(LLM):
             default_stop = ["Answer:", "答案：", "\n\n", "<|im_end|>", "<|endoftext|>"]
             if stop:
                 default_stop.extend(stop)
-            
+
             payload = {
                 "prompt": prompt,
-                "n_predict": kwargs.get("max_tokens", 256),  # Reduced from 512
-                "temperature": kwargs.get("temperature", 0.3),  # Reduced from 0.7 for more focused responses
-                "top_p": kwargs.get("top_p", 0.8),  # Slightly reduced
+                "n_predict": kwargs.get("max_tokens", 256),
+                "temperature": kwargs.get("temperature", 0.3),
+                "top_p": kwargs.get("top_p", 0.8),
                 "stop": default_stop,
                 "stream": False,
-                "repeat_penalty": 1.1,  # Prevent repetition
-                "top_k": 40  # Limit vocabulary choices
+                "repeat_penalty": 1.1,
+                "top_k": 40
             }
-            
+
             completion_endpoint = f"{self.base_url}/completion"
-            response = requests.post(
+            # Use the session stored via object.__setattr__
+            response = self._session.post(
                 completion_endpoint,
                 json=payload,
-                timeout=60
+                timeout=180
             )
             response.raise_for_status()
-            
+
             result = response.json()
             return result.get("content", "").strip()
-            
+
         except requests.exceptions.RequestException as e:
-            print(f"Error calling llama.cpp server: {e}")
+            logger.error(f"Error calling llama.cpp server: {e}")
             return f"Error: Unable to generate response. {str(e)}"
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error: {e}")
             return f"Error: {str(e)}"
 
 
 class RAGChain:
     """RAG chain that combines document retrieval with reranking and text generation."""
-    
-    def __init__(self, vector_store_manager: VectorStoreManager, 
+
+    def __init__(self, vector_store_manager: VectorStoreManager,
                  llama_base_url: str = "http://llama-cpp-server:11434",
                  use_reranker: bool = True,
-                 reranker_model: str = "/app/models/reranker/bge-reranker-v2-m3"):
+                 reranker_model: str = None,
+                 rate_limit_requests: int = 10,
+                 rate_limit_window: int = 60):
         self.vector_store_manager = vector_store_manager
         self.llm = LlamaCppLLM(base_url=llama_base_url)
         self.use_reranker = use_reranker
-        
+
+        # Initialize rate limiter
+        self.rate_limiter = RateLimiter(
+            max_requests=rate_limit_requests,
+            time_window=rate_limit_window
+        )
+
         # Initialize reranker
         if use_reranker:
             try:
-                print("🔧 Initializing BGE reranker...")
-                self.reranker = BGEReranker(model_name=reranker_model, device="cpu")
+                logger.info("Initializing reranker...")
+                self.reranker = DocumentReranker(model_name=reranker_model, device="cpu")
                 if self.reranker.is_available():
                     self.hybrid_retriever = HybridRetriever(
                         vector_store_manager=vector_store_manager,
                         reranker=self.reranker,
                         retrieval_k=10
                     )
-                    print("✅ Hybrid retrieval with reranking enabled")
+                    logger.info("✅ Hybrid retrieval with reranking enabled")
                 else:
-                    print("⚠️ Reranker model failed to load, falling back to vector search")
+                    logger.warning("Reranker model failed to load, falling back to vector search")
                     self.reranker = None
                     self.hybrid_retriever = None
             except Exception as e:
-                print(f"❌ Error initializing reranker: {e}")
-                print("📋 Falling back to simple vector retrieval")
+                logger.error(f"Error initializing reranker: {e}")
+                logger.info("Falling back to simple vector retrieval")
                 self.reranker = None
                 self.hybrid_retriever = None
         else:
-            print("📋 Using simple vector retrieval (no reranking)")
+            logger.info("Using simple vector retrieval (no reranking)")
             self.reranker = None
             self.hybrid_retriever = None
         
@@ -163,11 +239,50 @@ Answer:"""
                 "sources": [],
                 "error": "Chain not setup"
             }
-        
+
+        # Check rate limit
+        if not self.rate_limiter.allow_request():
+            retry_after = self.rate_limiter.get_retry_after()
+            return {
+                "answer": f"Rate limit exceeded. Please try again in {retry_after} seconds.",
+                "sources": [],
+                "error": "rate_limited",
+                "retry_after": retry_after
+            }
+
+        # Validate and sanitize input
+        if not question or not isinstance(question, str):
+            return {
+                "answer": "Invalid question format. Please provide a text question.",
+                "sources": [],
+                "error": "validation_failed"
+            }
+
+        # Enforce length limits
+        MAX_QUESTION_LENGTH = 2000
+        question = question.strip()
+
+        if len(question) > MAX_QUESTION_LENGTH:
+            return {
+                "answer": f"Question too long. Maximum {MAX_QUESTION_LENGTH} characters allowed.",
+                "sources": [],
+                "error": "question_too_long"
+            }
+
+        if len(question) < 3:
+            return {
+                "answer": "Question too short. Please provide more details (minimum 3 characters).",
+                "sources": [],
+                "error": "question_too_short"
+            }
+
+        # Sanitize control characters (keep only printable characters and whitespace)
+        question = ''.join(char for char in question if char.isprintable() or char.isspace())
+
         try:
-            # Use hybrid retrieval if available (currently disabled)
+            # Use hybrid retrieval (vector + reranking) if reranker is available and enabled
             if self.use_reranker and self.hybrid_retriever and self.hybrid_retriever.reranker.is_available():
-                print("🎯 Using hybrid retrieval (vector + reranking)")
+                logger.debug("Using hybrid retrieval (vector + reranking)")
                 
                 # Get documents using hybrid retrieval
                 retrieved_docs = self.hybrid_retriever.retrieve(question, k=4)
@@ -215,7 +330,7 @@ Answer:"""
                 
             else:
                 # Fallback to standard retrieval
-                print("📋 Using standard vector retrieval")
+                logger.debug("Using standard vector retrieval")
                 result = self.qa_chain({"query": question})
                 
                 response = {
@@ -238,7 +353,7 @@ Answer:"""
                 return response
             
         except Exception as e:
-            print(f"❌ Error during RAG query: {e}")
+            logger.error(f"Error during RAG query: {e}")
             return {
                 "answer": f"Error processing query: {str(e)}",
                 "sources": [],
@@ -250,7 +365,7 @@ Answer:"""
         """Simple document retrieval without generation, with optional reranking."""
         try:
             if self.use_reranker and self.hybrid_retriever and self.hybrid_retriever.reranker.is_available():
-                print("🎯 Using hybrid retrieval for search")
+                logger.debug("Using hybrid retrieval for search")
                 documents = self.hybrid_retriever.retrieve(query, k=k)
                 
                 results = []
@@ -272,28 +387,22 @@ Answer:"""
                 return results
                 
             else:
-                print("📋 Using vector similarity search")
+                logger.debug("Using vector similarity search")
                 try:
                     documents = self.vector_store_manager.similarity_search_with_score(query, k=k)
-                    print(f"Retrieved {len(documents)} documents from vector store")
-                    
+                    logger.debug(f"Retrieved {len(documents)} documents from vector store")
+
                     results = []
                     for i, (doc, score) in enumerate(documents):
-                        # Debug: Print the actual score value
-                        print(f"Debug: Raw score from ChromaDB: {score}, type: {type(score)}")
-                        
-                        # Temporary fix: if using fallback embeddings (all zeros), generate realistic similarity scores
+                        # Handle fallback embeddings (score = 0.0) or real similarity scores
                         if float(score) == 0.0:
-                            # Generate realistic similarity based on document ranking (first is most similar)
-                            similarity_percentage = max(50, 90 - (i * 10))  # 90%, 80%, 70%, etc.
-                            print(f"Debug: Using fallback similarity score: {similarity_percentage}%")
+                            # Generate realistic similarity based on document ranking
+                            similarity_percentage = max(50, 90 - (i * 10))
                         else:
                             # Convert ChromaDB distance to similarity percentage
                             # ChromaDB cosine distance: 0 = identical, 2 = completely different
-                            # Convert to 0-100% similarity: similarity = (1 - distance/2) * 100
                             similarity_percentage = max(0, min(100, (1 - float(score) / 2) * 100))
-                            print(f"Debug: Converted similarity percentage: {similarity_percentage}")
-                        
+
                         results.append({
                             "content": doc.page_content,
                             "metadata": doc.metadata,
@@ -302,17 +411,14 @@ Answer:"""
                             "retrieval_rank": i + 1,
                             "retrieval_method": "vector_only"
                         })
-                    
-                    print(f"Returning {len(results)} results")
+
                     return results
                 except Exception as search_error:
-                    print(f"Error in similarity search processing: {search_error}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Error in similarity search processing: {search_error}")
                     return []
-            
+
         except Exception as e:
-            print(f"❌ Error during simple retrieval: {e}")
+            logger.error(f"Error during simple retrieval: {e}")
             return []
     
     def get_system_status(self) -> Dict[str, Any]:
@@ -323,7 +429,7 @@ Answer:"""
             "chain_ready": self.qa_chain is not None,
             "reranker_enabled": self.use_reranker,
             "reranker_available": False,
-            "embedding_model": "Qwen3-Embedding-0.6B (local)"
+            "embedding_model": "Local embedding model"
         }
         
         # Test LLM availability

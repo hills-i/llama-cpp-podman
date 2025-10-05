@@ -141,7 +141,7 @@ function displaySystemStatus(status) {
     if (status.embedding_model) {
         statusHTML += `
             <div class="status-item info">
-                <strong>Embedding:</strong> ${status.embedding_model.replace('Qwen/Qwen3-Embedding-0.6B', 'Qwen3-Embedding-0.6B')}
+                <strong>Embedding:</strong> ${status.embedding_model}
             </div>
         `;
     }
@@ -159,7 +159,7 @@ function displaySystemStatus(status) {
         if (status.reranker_model && status.reranker_model !== 'Disabled') {
             statusHTML += `
                 <div class="status-item info">
-                    <strong>Reranker Model:</strong> ${status.reranker_model.replace('BAAI/bge-reranker-v2-m3', 'BGE-reranker-v2-m3')}
+                    <strong>Reranker Model:</strong> ${status.reranker_model}
                 </div>
             `;
         }
@@ -413,68 +413,58 @@ function displaySearchResults(results) {
     searchResults.style.display = 'block';
 }
 
+// Cache for query processing to avoid redundant tokenization
+const queryCache = {
+    text: null,
+    words: null,
+    wordsSet: null,
+    lowerQuery: null
+};
+
 function calculateFallbackSimilarity(query, content, index) {
     if (!query || !content) {
         // Default ranking-based score if no query
         return (85 - index * 5).toFixed(1);
     }
-    
-    const queryWords = query.split(/\s+/).filter(word => word.length > 2);
+
+    // Cache expensive query operations
+    if (queryCache.text !== query) {
+        const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        queryCache.text = query;
+        queryCache.words = queryWords;
+        queryCache.wordsSet = new Set(queryWords);
+        queryCache.lowerQuery = query.toLowerCase();
+    }
+
     const contentLower = content.toLowerCase();
-    const queryLower = query.toLowerCase();
-    
+
+    // Quick exact phrase match check (most discriminative)
+    if (contentLower.includes(queryCache.lowerQuery)) {
+        return Math.max(85, 90 - index * 2).toFixed(1);
+    }
+
+    // Count word matches using Set for O(1) lookup
     let matchScore = 0;
-    let totalPossible = queryWords.length;
-    
-    // Calculate basic word matching score
-    queryWords.forEach(word => {
-        const wordLower = word.toLowerCase();
-        if (contentLower.includes(wordLower)) {
-            matchScore += 1;
-            // Bonus for exact word boundaries
-            const wordRegex = new RegExp(`\\b${wordLower}\\b`, 'i');
-            if (wordRegex.test(content)) {
-                matchScore += 0.3;
-            }
-        }
-    });
-    
-    // Additional scoring based on query phrase matching
-    let phraseBonus = 0;
-    if (contentLower.includes(queryLower)) {
-        phraseBonus = 20; // Big bonus for exact phrase match
-    } else {
-        // Partial phrase matching
-        const queryChunks = queryLower.split(/\s+/);
-        for (let i = 0; i < queryChunks.length - 1; i++) {
-            const phrase = queryChunks.slice(i, i + 2).join(' ');
-            if (contentLower.includes(phrase)) {
-                phraseBonus += 5;
-            }
+    const contentWords = contentLower.split(/\s+/);
+
+    for (const word of contentWords) {
+        if (queryCache.wordsSet.has(word)) {
+            matchScore++;
         }
     }
-    
-    // Base similarity calculation
-    let similarity;
-    if (totalPossible > 0) {
-        const matchRatio = matchScore / (totalPossible * 1.3); // Adjust for bonus points
-        similarity = matchRatio * 50 + phraseBonus + 30; // Base of 30%
-    } else {
-        similarity = 50;
-    }
-    
-    // Apply ranking penalty (smaller penalty to maintain diversity)
-    similarity = similarity - (index * 3);
-    
-    // Add realistic variance based on content characteristics
-    const contentHash = content.length + query.length;
-    const variance = (Math.sin(contentHash) * 8) + (Math.cos(contentHash * 0.7) * 4);
+
+    // Calculate similarity percentage
+    const matchRatio = queryCache.words.length > 0
+        ? matchScore / queryCache.words.length
+        : 0;
+
+    let similarity = (matchRatio * 60) + 30 - (index * 3);
+
+    // Add small variance for realistic distribution
+    const variance = (content.length % 10) - 5;
     similarity += variance;
-    
-    // Ensure reasonable bounds with better distribution
-    similarity = Math.max(25, Math.min(95, similarity));
-    
-    return similarity.toFixed(1);
+
+    return Math.max(25, Math.min(95, similarity)).toFixed(1);
 }
 
 function displaySearchError(message) {
@@ -509,7 +499,15 @@ function hideLoading() {
     loadingDiv.classList.add('hidden');
 }
 
+function escapeHtml(text) {
+    // Escape HTML special characters to prevent XSS
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function formatText(text) {
-    // Simple text formatting - convert newlines to <br> and preserve spacing
-    return text.replace(/\n/g, '<br>').replace(/  /g, '&nbsp;&nbsp;');
+    // Escape HTML first to prevent XSS, then format newlines and spacing
+    const escaped = escapeHtml(text);
+    return escaped.replace(/\n/g, '<br>').replace(/  /g, '&nbsp;&nbsp;');
 }

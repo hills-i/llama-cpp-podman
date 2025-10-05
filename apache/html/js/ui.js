@@ -27,7 +27,7 @@ function setupCommonUI({
 }) {
     // Copy button handler
     copyBtn.addEventListener('click', () => {
-        const text = responseDiv.innerHTML;
+        const text = responseDiv.textContent;  // Use textContent to prevent XSS
         navigator.clipboard.writeText(text)
             .then(() => {
                 const originalText = copyBtn.textContent;
