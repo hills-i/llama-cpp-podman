@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translation (JA ⇔ EN)</title>
+    <link rel="stylesheet" href="css/common.css">
+    <script src="js/model-list.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/translate.js"></script>
+</head>
+<body>
+    <div class="main-grid">
+        <div class="sidemenu">Side Menu</div>
+        <div class="container">
+            <h1>Translation (JA ⇔ EN)</h1>
+            <div class="form-group">
+                <label for="model">Model</label>
+                <select id="model">
+                    <option>Loading models...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Translation Direction</label>
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="direction" value="ja-en" checked>
+                        Japanese ⇒ English
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="direction" value="en-ja">
+                        English ⇒ Japanese
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="prompt">Input Text</label>
+                <textarea id="prompt" class="textbox-container" rows="12" placeholder="Please enter the text to translate here..."></textarea>
+            </div>
+            <button id="submitBtn">Submit</button>
+
+            <div class="response-container">
+                <div class="response-header">
+                    <div class="response-title">Translation Result</div>
+                    <div class="btn-group">
+                        <button id="copyBtn" class="btn-small hidden">Copy</button>
+                        <button id="clearBtn" class="btn-small">Clear</button>
+                    </div>
+                </div>
+                <div id="loading" class="loading hidden">
+                    <div class="spinner"></div>
+                </div>
+                <div id="response" class="response-box"></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

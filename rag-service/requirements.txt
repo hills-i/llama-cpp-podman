@@ -1,9 +1,12 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
 langchain==0.2.16
 langchain-community==0.2.16
 langchain-core==0.2.38
 chromadb==0.5.5
 transformers==4.44.0
-torch==2.4.0
+torch>=2.4.0
 fastapi==0.114.0
 uvicorn==0.30.0
 python-multipart==0.0.9

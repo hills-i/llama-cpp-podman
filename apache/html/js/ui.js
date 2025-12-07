@@ -203,6 +203,34 @@ function initReplyLocalUI(prompt_template_1, prompt_template_2, prompt_template_
     });
 }
 
+function initTranslateUI(prompt_ja_to_en, prompt_en_to_ja, prompt_suffix) {
+    document.addEventListener('DOMContentLoaded', () => {
+        const modelSelect = document.getElementById('model');
+        const promptInput = document.getElementById('prompt');
+        const submitBtn = document.getElementById('submitBtn');
+        const responseDiv = document.getElementById('response');
+        const loadingDiv = document.getElementById('loading');
+        const copyBtn = document.getElementById('copyBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        setupCommonUI({ submitBtn, responseDiv, loadingDiv, copyBtn, clearBtn, promptInput });
+
+        submitBtn.addEventListener('click', handleSubmit({
+            getPrompt: () => {
+                const direction = document.querySelector('input[name="direction"]:checked').value;
+                const prefix = direction === 'ja-en' ? prompt_ja_to_en : prompt_en_to_ja;
+                return prefix + promptInput.value.trim() + prompt_suffix;
+            },
+            modelSelect,
+            responseDiv,
+            loadingDiv,
+            copyBtn,
+            submitBtn,
+            errorMsg: 'Translation error occurred'
+        }));
+    });
+}
+
 // Load side menu from external JSON file and insert as links into .sidemenu
 function loadSideMenu(menuPath = 'json/sidemenu.json') {
     document.addEventListener('DOMContentLoaded', () => {

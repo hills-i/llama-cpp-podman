@@ -92,6 +92,26 @@ input:focus, select:focus, textarea:focus {
     margin-bottom: 20px;
 }
 
+.radio-group {
+    display: flex;
+    gap: 24px;
+    margin-top: 8px;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: normal;
+}
+
+.radio-label input[type="radio"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
 button {
     background-color: var(--primary-color);
     color: white;

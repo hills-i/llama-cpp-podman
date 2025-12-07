@@ -7,7 +7,7 @@ A production-ready containerized setup for running **llama.cpp inference server*
 - 🦙 **LLM Inference** with llama.cpp and GGUF models
 - 🧠 **RAG System** with semantic search and document Q&A
 - 🔒 **Security** with HTTPS, authentication, and network isolation
-- 🐳 **Containers** with Podman Compose and Kubernetes support
+- 🐳 **Containers** with Kubernetes support
 - 📁 **Multi-Format Support** for PDF, DOCX, TXT, and JSON documents
 
 ## 🚀 Quick Start
@@ -95,7 +95,6 @@ graph TB
 ```
 llama-cpp/
 ├── 🐳 Container Configs
-│   ├── podman-compose.yml    # Compose deployment
 │   └─── kube.yaml             # Kubernetes deployment
 ├── 🌐 Apache Setup
 │   ├── conf/
@@ -104,10 +103,14 @@ llama-cpp/
 │   ├── certs/                # SSL certificates (excluded from git)
 │   ├── logs/                 # Access logs
 │   └── html/                 # Web applications
-│       ├── index.html        # Web interface
-│       ├── rag.html          # RAG interface
-│       ├── proofread.html    # Text processing
+│       ├── index.html        # Main web interface
+│       ├── rag.html          # RAG document Q&A
+│       ├── rag-chat.html     # RAG continuous chat
+│       ├── translate.html    # JA ⇔ EN translation
+│       ├── proofread.html    # Text proofreading
 │       ├── reply.html        # Email assistant
+│       ├── sidemenu.html     # Navigation menu
+│       ├── css/              # Stylesheets
 │       └── js/               # Client-side functionality
 ├── 🤖 Models
 │   └── *.gguf               # GGUF model files (excluded from git)
@@ -183,9 +186,8 @@ curl -k -u admin:llama123 https://localhost:8443/rag/status | jq '.documents'
 
 ### Model Configuration
 
-Update both files with your model path:
+Update kube.yaml with your model path:
 
-**kube.yaml:**
 ```yaml
 env:
 - name: MODEL_FILE
@@ -193,14 +195,6 @@ env:
 args:
 - -m
 - /models/your-model.gguf
-```
-
-**podman-compose.yml:**
-```yaml
-environment:
-  - MODEL_FILE=/models/your-model.gguf
-command: >
-  -m ${MODEL_FILE}
 ```
 
 ## 🧠 RAG System Deep Dive

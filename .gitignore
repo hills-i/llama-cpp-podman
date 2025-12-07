@@ -1,5 +1,5 @@
 apache/certs/
-apache/conf/.htpasswd
+.htpasswd
 apache/logs/*
 models/*
 venv
@@ -9,6 +9,8 @@ scripts/*
 rag-service/data/chroma_db/*
 rag-service/documents/*
 rag-service/models/*
+rag-service/src/verify*
+rag-service/.venv*
 
 # Editor directories and files
 .vscode/
@@ -28,8 +30,18 @@ rag-service/models/*
 ehthumbs.db
 Thumbs.db
 
+AGENTS.md
+CODE_REVIEW.md
 CLAUDE.md
 SECURITY_CHECKLIST.md
 SECURITY_FIXES_SUMMARY.md
 SYSTEM_STATE.md
 rag-service/README-RAG.md
+
+podman-compose.yml
+
+#ubi10
+rag-service/Dockerfile.ubi10-python
+apache/conf.d/contents.conf
+kube-ubi.yaml
+
