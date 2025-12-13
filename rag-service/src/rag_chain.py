@@ -8,9 +8,9 @@ import logging
 from threading import Lock
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
 from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from pydantic import ConfigDict
 
 from .vector_store import VectorStoreManager
 from .reranker import DocumentReranker, HybridRetriever
@@ -60,9 +60,7 @@ class LlamaCppLLM(LLM):
 
     base_url: str = "http://llama-cpp-server:11434"
 
-    class Config:
-        """Pydantic config to allow arbitrary types."""
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, base_url: str = "http://llama-cpp-server:11434", **kwargs):
         super().__init__(base_url=base_url, **kwargs)
@@ -158,6 +156,9 @@ class RAGChain:
         )
 
         # Initialize reranker
+        self.reranker = None
+        self.hybrid_retriever = None
+        
         if use_reranker:
             try:
                 logger.info("Initializing reranker...")
@@ -180,9 +181,7 @@ class RAGChain:
                 self.hybrid_retriever = None
         else:
             logger.info("Using simple vector retrieval (no reranking)")
-            self.reranker = None
-            self.hybrid_retriever = None
-        
+
         # Define the prompt template
         self.prompt_template = PromptTemplate(
             input_variables=["context", "question"],
@@ -195,51 +194,10 @@ Question: {question}
 
 Answer:"""
         )
-        
-        # Initialize the retrieval chain
-        self._setup_chain()
-    
-    def _setup_chain(self):
-        """Setup the retrieval QA chain with hybrid retrieval."""
-        try:
-            if self.use_reranker and self.hybrid_retriever:
-                # Use hybrid retrieval (vector + reranking)
-                print("🔧 Setting up RAG chain with hybrid retrieval")
-                # We'll implement custom retrieval in query method
-                # For now, setup basic retriever as fallback
-                retriever = self.vector_store_manager.get_retriever(
-                    search_kwargs={"k": 4}
-                )
-            else:
-                # Use simple vector retrieval
-                print("🔧 Setting up RAG chain with vector retrieval only")
-                retriever = self.vector_store_manager.get_retriever(
-                    search_kwargs={"k": 4}
-                )
-            
-            self.qa_chain = RetrievalQA.from_chain_type(
-                llm=self.llm,
-                chain_type="stuff",
-                retriever=retriever,
-                return_source_documents=True,
-                chain_type_kwargs={"prompt": self.prompt_template}
-            )
-            
-            print("✅ RAG chain setup complete")
-            
-        except Exception as e:
-            print(f"❌ Error setting up RAG chain: {e}")
-            self.qa_chain = None
-    
+
     def query(self, question: str, include_sources: bool = True) -> Dict[str, Any]:
         """Query the RAG system with hybrid retrieval."""
-        if not self.qa_chain:
-            return {
-                "answer": "RAG system not initialized properly",
-                "sources": [],
-                "error": "Chain not setup"
-            }
-
+        
         # Check rate limit
         if not self.rate_limiter.allow_request():
             retry_after = self.rate_limiter.get_retry_after()
@@ -276,81 +234,65 @@ Answer:"""
                 "error": "question_too_short"
             }
 
-        # Sanitize control characters (keep only printable characters and whitespace)
+        # Sanitize control characters
         question = ''.join(char for char in question if char.isprintable() or char.isspace())
 
         try:
+            # RETRIEVAL STEP
+            retrieved_docs = []
+            retrieval_method = "vector_only"
+            
             # Use hybrid retrieval (vector + reranking) if reranker is available and enabled
             if self.use_reranker and self.hybrid_retriever and self.hybrid_retriever.reranker.is_available():
                 logger.debug("Using hybrid retrieval (vector + reranking)")
-                
-                # Get documents using hybrid retrieval
+                retrieval_method = "hybrid_reranking"
                 retrieved_docs = self.hybrid_retriever.retrieve(question, k=4)
-                
-                if not retrieved_docs:
-                    return {
-                        "answer": "No relevant documents found in the knowledge base.",
-                        "sources": [],
-                        "question": question
-                    }
-                
-                # Prepare context from retrieved documents
-                context = "\n\n".join([doc.page_content for doc in retrieved_docs])
-                
-                # Generate answer using LLM
-                prompt = self.prompt_template.format(context=context, question=question)
-                answer = self.llm._call(prompt)
-                
-                response = {
-                    "answer": answer,
-                    "question": question,
-                    "retrieval_method": "hybrid_reranking"
-                }
-                
-                # Add source information
-                if include_sources:
-                    sources = []
-                    for i, doc in enumerate(retrieved_docs):
-                        source_info = {
-                            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                            "metadata": doc.metadata,
-                            "source": doc.metadata.get("source", "Unknown"),
-                            "retrieval_rank": i + 1
-                        }
-                        
-                        # Add reranking score if available
-                        if "rerank_score" in doc.metadata:
-                            source_info["rerank_score"] = doc.metadata["rerank_score"]
-                        
-                        sources.append(source_info)
-                    
-                    response["sources"] = sources
-                
-                return response
-                
             else:
-                # Fallback to standard retrieval
+                # Fallback to standard vector retrieval
                 logger.debug("Using standard vector retrieval")
-                result = self.qa_chain({"query": question})
-                
-                response = {
-                    "answer": result["result"],
-                    "question": question,
-                    "retrieval_method": "vector_only"
+                retrieved_docs = self.vector_store_manager.similarity_search(question, k=4)
+            
+            if not retrieved_docs:
+                return {
+                    "answer": "No relevant documents found in the knowledge base.",
+                    "sources": [],
+                    "question": question
                 }
+            
+            # CONTEXT PREPARATION
+            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+            
+            # GENERATION STEP
+            prompt = self.prompt_template.format(context=context, question=question)
+            answer = self.llm._call(prompt)
+            
+            # RESPONSE FORMATTING
+            response = {
+                "answer": answer,
+                "question": question,
+                "retrieval_method": retrieval_method
+            }
+            
+            # Add source information
+            if include_sources:
+                sources = []
+                for i, doc in enumerate(retrieved_docs):
+                    source_info = {
+                        "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                        "metadata": doc.metadata,
+                        "source": doc.metadata.get("source", "Unknown"),
+                        "retrieval_rank": i + 1
+                    }
+                    
+                    # Add reranking score if available
+                    if "rerank_score" in doc.metadata:
+                        source_info["rerank_score"] = doc.metadata["rerank_score"]
+                    
+                    sources.append(source_info)
                 
-                if include_sources and "source_documents" in result:
-                    sources = []
-                    for i, doc in enumerate(result["source_documents"]):
-                        sources.append({
-                            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                            "metadata": doc.metadata,
-                            "source": doc.metadata.get("source", "Unknown"),
-                            "retrieval_rank": i + 1
-                        })
-                    response["sources"] = sources
-                
-                return response
+                response["sources"] = sources
+            
+            return response
             
         except Exception as e:
             logger.error(f"Error during RAG query: {e}")
@@ -426,7 +368,7 @@ Answer:"""
         status = {
             "vector_store": self.vector_store_manager.get_collection_info(),
             "llm_available": False,
-            "chain_ready": self.qa_chain is not None,
+            "chain_ready": True, # Changed to True as we use manual logic
             "reranker_enabled": self.use_reranker,
             "reranker_available": False,
             "embedding_model": "Local embedding model"

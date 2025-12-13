@@ -45,9 +45,6 @@ cd rag-service/models
 git clone https://huggingface.co/Qwen/Qwen3-Embedding-0.6B embedding
 git clone https://huggingface.co/BAAI/bge-reranker-v2-m3 reranker
 cd ../..
-
-# Update configuration
-sed -i 's|/models/Qwen3-0.6B-Q8_0.gguf|/models/qwen2.5-0.5b-instruct-q8_0.gguf|g' kube.yaml
 ```
 
 ### 2. Start Services
@@ -64,7 +61,7 @@ podman play kube kube.yaml
 ### 3. Access Web Interface
 
 🌐 **URL**: https://localhost:8443/html/index.html
-🔐 **Login**: `admin` / `llama123`
+🔐 **Login**: `user` / `pass`
 
 ## 🏗️ Architecture
 
@@ -98,8 +95,8 @@ llama-cpp/
 │   └─── kube.yaml             # Kubernetes deployment
 ├── 🌐 Apache Setup
 │   ├── conf/
-│   │   ├── httpd.conf        # Reverse proxy + security
-│   │   └── .htpasswd         # Authentication (excluded from git)
+│   │   └── httpd.conf        # Reverse proxy + security
+│   ├── .htpasswd             # Authentication (excluded from git)
 │   ├── certs/                # SSL certificates (excluded from git)
 │   ├── logs/                 # Access logs
 │   └── html/                 # Web applications
@@ -165,8 +162,8 @@ podman logs -f rag-service-deployment-pod-rag-service
 podman logs -f apache-deployment-pod-apache
 
 # Health checks
-curl -k -u admin:llama123 https://localhost:8443/health
-curl -k -u admin:llama123 https://localhost:8443/rag/status
+curl -k -u user:pass https://localhost:8443/health
+curl -k -u user:pass https://localhost:8443/rag/status
 ```
 
 ### Data Management
@@ -179,7 +176,7 @@ tar -czf rag-backup-$(date +%Y%m%d).tar.gz rag-service/data/
 rm -rf rag-service/data/chroma_db/
 
 # View document stats
-curl -k -u admin:llama123 https://localhost:8443/rag/status | jq '.documents'
+curl -k -u user:pass https://localhost:8443/rag/status | jq '.documents'
 ```
 
 ## ⚙️ Configuration
@@ -190,11 +187,11 @@ Update kube.yaml with your model path:
 
 ```yaml
 env:
-- name: MODEL_FILE
-  value: /models/your-model.gguf
+- name: MODEL_DIRECTORY
+  value: /models
 args:
-- -m
-- /models/your-model.gguf
+- --models-dir
+- /models
 ```
 
 ## 🧠 RAG System Deep Dive
@@ -213,9 +210,9 @@ args:
 ### Dependencies
 
 The RAG service uses LangChain 0.2.16+ with modular packages:
-- `langchain==0.2.16` - Core framework (auto-installs langchain-text-splitters)
-- `langchain-community==0.2.16` - Community integrations (document loaders, vector stores)
-- `langchain-core==0.2.38` - Base abstractions (documents, embeddings, prompts)
+- `langchain>=1.1.3`
+- `langchain-community>=0.4.1`
+- `langchain-core>=1.1.2`
 
 All imports have been updated to use the new package structure to avoid deprecation warnings.
 
@@ -286,7 +283,7 @@ Response: {"choices": [...]}
 
 **Default Settings:**
 - Self-signed SSL certificates
-- Basic authentication: `admin` / `llama123`
+- Basic authentication: `user` / `pass`
 - CORS: Allow all origins
 - Network: Internet access enabled
 
@@ -307,8 +304,8 @@ python3 -c "
 import crypt
 password = input('Enter secure password: ')
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-print(f'admin:{encrypted}')
-" > apache/conf/.htpasswd
+print(f'user:{encrypted}')
+" > apache/.htpasswd
 
 # Add additional users
 python3 -c "
@@ -317,7 +314,7 @@ username = 'newuser'
 password = 'securepass'
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 print(f'{username}:{encrypted}')
-" >> apache/conf/.htpasswd
+" >> apache/.htpasswd
 ```
 
 **3. CORS Configuration (rag-service/src/main.py):**
@@ -362,8 +359,7 @@ sudo ufw deny 8081/tcp    # Block direct RAG access
 ```bash
 # Add new model
 cp your-model.gguf models/
-# Update kube.yaml with model path
-sed -i 's|MODEL_FILE.*|MODEL_FILE=/models/your-model.gguf|g' kube.yaml
+
 # Restart services
 podman play kube --down kube.yaml
 podman play kube kube.yaml
@@ -374,12 +370,12 @@ podman play kube kube.yaml
 ```bash
 # Upload directory of documents
 for file in /path/to/docs/*; do
-    curl -k -u admin:llama123 -X POST https://localhost:8443/rag/upload \
+    curl -k -u user:pass -X POST https://localhost:8443/rag/upload \
          -F "file=@$file"
 done
 
 # Or use the ingest endpoint for documents/ directory
-curl -k -u admin:llama123 -X POST https://localhost:8443/rag/ingest
+curl -k -u user:pass -X POST https://localhost:8443/rag/ingest
 ```
 
 ### API Integration Examples
@@ -392,7 +388,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 class LlamaRAGClient:
-    def __init__(self, base_url="https://localhost:8443", username="admin", password="llama123"):
+    def __init__(self, base_url="https://localhost:8443", username="user", password="pass"):
         self.base_url = base_url
         self.auth = HTTPBasicAuth(username, password)
         self.session = requests.Session()
@@ -456,13 +452,13 @@ cat apache/conf/.htpasswd
 # Recreate with new password
 python3 -c "
 import crypt
-password = 'llama123'
+password = 'pass'
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-print(f'admin:{encrypted}')
+print(f'user:{encrypted}')
 " > apache/conf/.htpasswd
 
 # Test authentication
-curl -k -u admin:llama123 https://localhost:8443/health
+curl -k -u user:pass https://localhost:8443/health
 ```
 
 </details>

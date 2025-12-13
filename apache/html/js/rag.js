@@ -34,7 +34,7 @@ function setupEventListeners() {
     askBtn.addEventListener('click', askQuestion);
     clearResponseBtn.addEventListener('click', clearResponse);
     searchBtn.addEventListener('click', searchDocuments);
-    
+
     // Enable Enter key for question input
     questionInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -42,7 +42,7 @@ function setupEventListeners() {
             askQuestion();
         }
     });
-    
+
     // Enable Enter key for search input
     searchInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
@@ -50,7 +50,7 @@ function setupEventListeners() {
             searchDocuments();
         }
     });
-    
+
     // Setup copy functionality for response
     copyResponseBtn.addEventListener('click', () => {
         const text = responseContent.textContent;
@@ -71,13 +71,13 @@ function setupEventListeners() {
 async function checkSystemStatus() {
     try {
         showLoading('Checking system status...');
-        
+
         const response = await fetch(`${RAG_BASE_URL}/status`);
-        
+
         // Check if response is JSON
         const contentType = response.headers.get('content-type');
         let status;
-        
+
         if (contentType && contentType.includes('application/json')) {
             status = await response.json();
         } else {
@@ -85,17 +85,17 @@ async function checkSystemStatus() {
             console.error('Non-JSON response from status endpoint:', text);
             throw new Error(`Status endpoint returned ${response.status}: ${response.statusText}. RAG service may not be running.`);
         }
-        
+
         displaySystemStatus(status);
         hideLoading();
-        
+
     } catch (error) {
         console.error('Error checking status:', error);
         statusInfo.innerHTML = `
             <div class="error">
                 ❌ Unable to connect to RAG service<br>
                 <small>Error: ${error.message}</small><br>
-                <small>Check if services are running: <code>podman-compose ps</code></small>
+                <small>Check if services are running: <code>podman ps</code></small>
             </div>
         `;
         hideLoading();
@@ -105,9 +105,9 @@ async function checkSystemStatus() {
 function displaySystemStatus(status) {
     const vectorStoreInfo = status.vector_store;
     const documentCount = vectorStoreInfo.document_count || 0;
-    
+
     let statusHTML = '<div class="status-grid">';
-    
+
     // Overall status
     const overallStatus = status.llm_available && status.chain_ready;
     statusHTML += `
@@ -115,28 +115,28 @@ function displaySystemStatus(status) {
             <strong>Overall Status:</strong> ${overallStatus ? '✅ Ready' : '⚠️ Partial'}
         </div>
     `;
-    
+
     // LLM status
     statusHTML += `
         <div class="status-item ${status.llm_available ? 'success' : 'error'}">
             <strong>LLM Server:</strong> ${status.llm_available ? '✅ Available' : '❌ Unavailable'}
         </div>
     `;
-    
+
     // Vector store status
     statusHTML += `
         <div class="status-item ${status.chain_ready ? 'success' : 'warning'}">
             <strong>Vector Store:</strong> ${status.chain_ready ? '✅ Ready' : '⚠️ Initializing'}
         </div>
     `;
-    
+
     // Document count
     statusHTML += `
         <div class="status-item info">
             <strong>Documents:</strong> ${documentCount} chunks available
         </div>
     `;
-    
+
     // Embedding model
     if (status.embedding_model) {
         statusHTML += `
@@ -145,7 +145,7 @@ function displaySystemStatus(status) {
             </div>
         `;
     }
-    
+
     // Reranker status
     if (status.reranker_enabled) {
         const rerankerStatus = status.reranker_available ? 'success' : 'warning';
@@ -155,7 +155,7 @@ function displaySystemStatus(status) {
                 <strong>Reranker:</strong> ${rerankerText}
             </div>
         `;
-        
+
         if (status.reranker_model && status.reranker_model !== 'Disabled') {
             statusHTML += `
                 <div class="status-item info">
@@ -164,24 +164,24 @@ function displaySystemStatus(status) {
             `;
         }
     }
-    
+
     statusHTML += '</div>';
-    
+
     statusInfo.innerHTML = statusHTML;
 }
 
 async function uploadFiles() {
     const files = fileInput.files;
-    
+
     if (!files || files.length === 0) {
         showUploadStatus('Please select files to upload', 'error');
         return;
     }
-    
+
     // Validate file types
     const supportedTypes = ['.txt', '.pdf', '.docx', '.json'];
     const invalidFiles = [];
-    
+
     for (let file of files) {
         const fileName = file.name.toLowerCase();
         const isSupported = supportedTypes.some(type => fileName.endsWith(type));
@@ -189,30 +189,30 @@ async function uploadFiles() {
             invalidFiles.push(file.name);
         }
     }
-    
+
     if (invalidFiles.length > 0) {
         showUploadStatus(`❌ Unsupported file types: ${invalidFiles.join(', ')}. Supported: TXT, PDF, DOCX, JSON`, 'error');
         return;
     }
-    
+
     try {
         showLoading('Uploading and processing files...');
         showUploadStatus('Uploading files...', 'info');
-        
+
         const formData = new FormData();
         for (let file of files) {
             formData.append('files', file);
         }
-        
+
         const response = await fetch(`${RAG_BASE_URL}/upload`, {
             method: 'POST',
             body: formData
         });
-        
+
         // Check if response is JSON
         const contentType = response.headers.get('content-type');
         let result;
-        
+
         if (contentType && contentType.includes('application/json')) {
             result = await response.json();
         } else {
@@ -221,7 +221,7 @@ async function uploadFiles() {
             console.error('Non-JSON response:', text);
             throw new Error(`Server returned ${response.status}: ${response.statusText}. Check if RAG service is running.`);
         }
-        
+
         if (response.ok) {
             showUploadStatus(`✅ ${result.message}`, 'success');
             // Refresh status to show updated document count
@@ -229,9 +229,9 @@ async function uploadFiles() {
         } else {
             showUploadStatus(`❌ Upload failed: ${result.detail || result.message || 'Unknown error'}`, 'error');
         }
-        
+
         hideLoading();
-        
+
     } catch (error) {
         console.error('Upload error:', error);
         showUploadStatus(`❌ Upload failed: ${error.message}`, 'error');
@@ -241,22 +241,22 @@ async function uploadFiles() {
 
 async function askQuestion() {
     const question = questionInput.value.trim();
-    
+
     if (!question) {
         alert('Please enter a question');
         return;
     }
-    
+
     try {
         showLoading('Generating answer...');
         clearResponse();
-        
+
         const requestBody = {
             question: question,
             include_sources: includeSourcesCheckbox.checked,
             k: 4
         };
-        
+
         const response = await fetch(`${RAG_BASE_URL}/query`, {
             method: 'POST',
             headers: {
@@ -264,17 +264,17 @@ async function askQuestion() {
             },
             body: JSON.stringify(requestBody)
         });
-        
+
         const result = await response.json();
-        
+
         if (response.ok) {
             displayAnswer(result);
         } else {
             displayError(`Query failed: ${result.detail}`);
         }
-        
+
         hideLoading();
-        
+
     } catch (error) {
         console.error('Query error:', error);
         displayError(`Error: ${error.message}`);
@@ -287,7 +287,7 @@ function displayAnswer(result) {
     responseContent.innerHTML = formatText(result.answer);
     responseSection.style.display = 'block';
     copyResponseBtn.classList.remove('hidden');
-    
+
     // Display sources if available
     if (result.sources && result.sources.length > 0) {
         displaySources(result.sources);
@@ -298,7 +298,7 @@ function displayAnswer(result) {
 
 function displaySources(sources) {
     let sourcesHTML = '<div class="sources-list">';
-    
+
     sources.forEach((source, index) => {
         sourcesHTML += `
             <div class="source-item">
@@ -315,7 +315,7 @@ function displaySources(sources) {
             </div>
         `;
     });
-    
+
     sourcesHTML += '</div>';
     sourcesContent.innerHTML = sourcesHTML;
     sourcesSection.style.display = 'block';
@@ -323,20 +323,20 @@ function displaySources(sources) {
 
 async function searchDocuments() {
     const query = searchInput.value.trim();
-    
+
     if (!query) {
         alert('Please enter a search query');
         return;
     }
-    
+
     try {
         showLoading('Searching documents...');
-        
+
         const requestBody = {
             question: query,
             k: 6
         };
-        
+
         const response = await fetch(`${RAG_BASE_URL}/search`, {
             method: 'POST',
             headers: {
@@ -344,17 +344,17 @@ async function searchDocuments() {
             },
             body: JSON.stringify(requestBody)
         });
-        
+
         const results = await response.json();
-        
+
         if (response.ok) {
             displaySearchResults(results);
         } else {
             displaySearchError(`Search failed: ${response.detail}`);
         }
-        
+
         hideLoading();
-        
+
     } catch (error) {
         console.error('Search error:', error);
         displaySearchError(`Error: ${error.message}`);
@@ -368,10 +368,10 @@ function displaySearchResults(results) {
         searchResults.style.display = 'block';
         return;
     }
-    
+
     // Get the search query for generating dynamic similarity scores
     const searchQuery = searchInput.value.trim().toLowerCase();
-    
+
     // Process results and add similarity scores
     const processedResults = results.map((result, index) => {
         // Handle similarity score - if 0.0 or N/A, generate realistic fallback scores
@@ -382,19 +382,19 @@ function displaySearchResults(results) {
             // Generate query-dependent similarity scores based on content matching
             score = parseFloat(calculateFallbackSimilarity(searchQuery, result.content, index));
         }
-        
+
         return {
             ...result,
             calculatedScore: score,
             originalIndex: index
         };
     });
-    
+
     // Sort by similarity score in descending order (highest first)
     processedResults.sort((a, b) => b.calculatedScore - a.calculatedScore);
-    
+
     let resultsHTML = '<div class="search-results-list">';
-    
+
     processedResults.forEach((result, displayIndex) => {
         resultsHTML += `
             <div class="search-result-item">
@@ -407,7 +407,7 @@ function displaySearchResults(results) {
             </div>
         `;
     });
-    
+
     resultsHTML += '</div>';
     searchResults.innerHTML = resultsHTML;
     searchResults.style.display = 'block';

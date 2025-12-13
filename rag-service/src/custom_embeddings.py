@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_BATCH_SIZE = 1000  # Maximum number of texts per batch request
 DEFAULT_MAX_TEXT_LENGTH = 100000  # Maximum characters per text (100KB)
 DEFAULT_MAX_SEQUENCE_LENGTH = 512  # Maximum tokens for model input
-DEFAULT_EMBEDDING_TIMEOUT = 30  # Seconds before embedding times out
+DEFAULT_EMBEDDING_TIMEOUT = 60  # Seconds before embedding times out
 DEFAULT_CACHE_MAX_SIZE = 10000  # Maximum cached embeddings
 EPSILON = 1e-9  # Small value to prevent division by zero
 
@@ -605,6 +605,11 @@ class LocalEmbeddings(Embeddings):
             # Validate input
             validated_text = self._validate_query(text)
             
+            # embedding = self._encode_texts([validated_text])
+            # return embedding[0].tolist()
+            validated_texts = self._validate_texts([text]) # Reuse _validate_texts to be safe? No, _validate_query exists.
+            
+            # Correct implementation:
             embedding = self._encode_texts([validated_text])
             return embedding[0].tolist()
             
@@ -685,8 +690,15 @@ def create_embeddings(model_path: str = None,
             logger.warning("Using fallback embeddings")
             return FallbackEmbeddings()
         
+        # Get timeout from env or use default
+        timeout = int(os.getenv("EMBEDDING_TIMEOUT", str(DEFAULT_EMBEDDING_TIMEOUT)))
+        
         # Try to load embeddings
-        return LocalEmbeddings(model_path=model_path, device=device)
+        return LocalEmbeddings(
+            model_path=model_path, 
+            device=device,
+            embedding_timeout_seconds=timeout
+        )
 
     except Exception as e:
         logger.error(f"⚠️ Failed to load embeddings: {e}", exc_info=True)

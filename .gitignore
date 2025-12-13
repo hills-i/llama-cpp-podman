@@ -40,8 +40,11 @@ rag-service/README-RAG.md
 
 podman-compose.yml
 
+init.sh
+init.template.sh
+
 #ubi10
-rag-service/Dockerfile.ubi10-python
-apache/conf.d/contents.conf
-kube-ubi.yaml
+#rag-service/Dockerfile.ubi10-python
+#apache/conf.d/contents.conf
+#kube-ubi.yaml
 
