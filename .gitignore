@@ -2,11 +2,11 @@ apache/certs/
 .htpasswd
 apache/logs/*
 models/*
-venv
+.venv
 backups/*
 scripts/*
 
-rag-service/data/chroma_db/*
+rag-service/data/chroma_db*
 rag-service/documents/*
 rag-service/models/*
 rag-service/src/verify*
@@ -19,6 +19,7 @@ rag-service/.venv*
 *.swo
 *~
 *.bk
+__pycache__/
 
 # OS generated files
 .DS_Store
@@ -38,13 +39,7 @@ SECURITY_FIXES_SUMMARY.md
 SYSTEM_STATE.md
 rag-service/README-RAG.md
 
-podman-compose.yml
-
 init.sh
 init.template.sh
 
-#ubi10
-#rag-service/Dockerfile.ubi10-python
-#apache/conf.d/contents.conf
-#kube-ubi.yaml
 

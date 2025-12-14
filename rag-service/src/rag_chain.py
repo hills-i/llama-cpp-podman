@@ -1,11 +1,13 @@
 """RAG chain implementation using LangChain and llama.cpp."""
 
+import os
+import uuid
 from typing import List, Dict, Any, Optional
 import requests
-import json
 import time
 import logging
 from threading import Lock
+from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 from langchain_core.language_models.llms import LLM
@@ -13,7 +15,7 @@ from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from pydantic import ConfigDict
 
 from .vector_store import VectorStoreManager
-from .reranker import DocumentReranker, HybridRetriever
+from .reranker import LlamaCppReranker
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +60,15 @@ class RateLimiter:
 class LlamaCppLLM(LLM):
     """Custom LLM wrapper for llama.cpp server with connection pooling."""
 
-    base_url: str = "http://llama-cpp-server:11434"
+    base_url: str = os.getenv("LLAMA_CPP_BASE_URL", "http://llama-cpp-server:11434")
+    model_name: Optional[str] = os.getenv("LLAMA_CPP_MODEL_NAME")
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(self, base_url: str = "http://llama-cpp-server:11434", **kwargs):
-        super().__init__(base_url=base_url, **kwargs)
+    def __init__(self, base_url: str = None, model_name: Optional[str] = None, **kwargs):
+        base_url = base_url or os.getenv("LLAMA_CPP_BASE_URL", "http://llama-cpp-server:11434")
+        model_name = model_name or os.getenv("LLAMA_CPP_MODEL_NAME")
+        super().__init__(base_url=base_url, model_name=model_name, **kwargs)
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(self, '_session', self._create_session())
 
@@ -106,6 +111,7 @@ class LlamaCppLLM(LLM):
                 default_stop.extend(stop)
 
             payload = {
+                "model": self.model_name,
                 "prompt": prompt,
                 "n_predict": kwargs.get("max_tokens", 256),
                 "temperature": kwargs.get("temperature", 0.3),
@@ -115,6 +121,11 @@ class LlamaCppLLM(LLM):
                 "repeat_penalty": 1.1,
                 "top_k": 40
             }
+
+            # Some llama.cpp server configs require explicit model selection.
+            # If not provided, omit it (older servers may not accept the field).
+            if not payload.get("model"):
+                payload.pop("model", None)
 
             completion_endpoint = f"{self.base_url}/completion"
             # Use the session stored via object.__setattr__
@@ -129,56 +140,69 @@ class LlamaCppLLM(LLM):
             return result.get("content", "").strip()
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error calling llama.cpp server: {e}")
-            return f"Error: Unable to generate response. {str(e)}"
+            logger.error("Error calling llama.cpp server", exc_info=True)
+            return "Error: Unable to generate response."
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            return f"Error: {str(e)}"
+            logger.error("Unexpected error calling llama.cpp server", exc_info=True)
+            return "Error: Unable to generate response."
 
 
 class RAGChain:
     """RAG chain that combines document retrieval with reranking and text generation."""
 
-    def __init__(self, vector_store_manager: VectorStoreManager,
-                 llama_base_url: str = "http://llama-cpp-server:11434",
-                 use_reranker: bool = True,
-                 reranker_model: str = None,
-                 rate_limit_requests: int = 10,
-                 rate_limit_window: int = 60):
+    def __init__(
+        self,
+        vector_store_manager: VectorStoreManager,
+        llama_base_url: Optional[str] = None,
+        use_reranker: bool = True,
+        reranker_model: str = None,
+        rate_limit_requests: int = 10,
+        rate_limit_window: int = 60,
+    ):
         self.vector_store_manager = vector_store_manager
         self.llm = LlamaCppLLM(base_url=llama_base_url)
         self.use_reranker = use_reranker
 
+        # Retrieval sizing
+        self.initial_retrieval_k = int(os.getenv("RETRIEVAL_CANDIDATES", "50"))
+        self.rerank_top_k = int(os.getenv("RERANK_TOP_K", "5"))
+
         # Initialize rate limiter
         self.rate_limiter = RateLimiter(
             max_requests=rate_limit_requests,
-            time_window=rate_limit_window
+            time_window=rate_limit_window,
         )
 
-        # Initialize reranker
+        # Base retriever always available
+        self.base_retriever = self.vector_store_manager.get_retriever(
+            search_kwargs={"k": self.initial_retrieval_k}
+        )
+
+        # Initialize reranker and contextual compression
         self.reranker = None
-        self.hybrid_retriever = None
-        
+        self.compression_retriever: Optional[ContextualCompressionRetriever] = None
+
         if use_reranker:
             try:
-                logger.info("Initializing reranker...")
-                self.reranker = DocumentReranker(model_name=reranker_model, device="cpu")
+                logger.info("Initializing HTTP reranker...")
+                self.reranker = LlamaCppReranker(
+                    api_base=os.getenv("RERANK_API_BASE"),
+                    model_name=reranker_model or os.getenv("RERANK_MODEL_NAME"),
+                    top_n=self.rerank_top_k,
+                )
+
                 if self.reranker.is_available():
-                    self.hybrid_retriever = HybridRetriever(
-                        vector_store_manager=vector_store_manager,
-                        reranker=self.reranker,
-                        retrieval_k=10
+                    self.compression_retriever = ContextualCompressionRetriever(
+                        base_compressor=self.reranker,
+                        base_retriever=self.base_retriever,
                     )
-                    logger.info("✅ Hybrid retrieval with reranking enabled")
+                    logger.info("✅ Contextual compression retriever enabled (vector → rerank)")
                 else:
-                    logger.warning("Reranker model failed to load, falling back to vector search")
+                    logger.warning("Rerank service unavailable; falling back to vector search")
                     self.reranker = None
-                    self.hybrid_retriever = None
             except Exception as e:
                 logger.error(f"Error initializing reranker: {e}")
-                logger.info("Falling back to simple vector retrieval")
                 self.reranker = None
-                self.hybrid_retriever = None
         else:
             logger.info("Using simple vector retrieval (no reranking)")
 
@@ -239,18 +263,18 @@ Answer:"""
 
         try:
             # RETRIEVAL STEP
-            retrieved_docs = []
             retrieval_method = "vector_only"
-            
-            # Use hybrid retrieval (vector + reranking) if reranker is available and enabled
-            if self.use_reranker and self.hybrid_retriever and self.hybrid_retriever.reranker.is_available():
-                logger.debug("Using hybrid retrieval (vector + reranking)")
-                retrieval_method = "hybrid_reranking"
-                retrieved_docs = self.hybrid_retriever.retrieve(question, k=4)
+
+            if self.use_reranker and self.compression_retriever:
+                logger.debug("Using contextual compression retriever (vector → rerank)")
+                retrieval_method = "vector_rerank"
+                # LangChain retrievers are Runnables; prefer invoke() for compatibility.
+                retrieved_docs = self.compression_retriever.invoke(question)
             else:
-                # Fallback to standard vector retrieval
                 logger.debug("Using standard vector retrieval")
-                retrieved_docs = self.vector_store_manager.similarity_search(question, k=4)
+                retrieved_docs = self.vector_store_manager.similarity_search(
+                    question, k=self.rerank_top_k
+                )
             
             if not retrieved_docs:
                 return {
@@ -295,21 +319,24 @@ Answer:"""
             return response
             
         except Exception as e:
-            logger.error(f"Error during RAG query: {e}")
+            error_id = str(uuid.uuid4())[:8]
+            logger.error("Error during RAG query", extra={"error_id": error_id}, exc_info=True)
             return {
-                "answer": f"Error processing query: {str(e)}",
+                "answer": "Error processing query. Please try again later.",
                 "sources": [],
-                "error": str(e),
+                "error": "internal_error",
+                "error_id": error_id,
                 "question": question
             }
     
     def simple_retrieval(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """Simple document retrieval without generation, with optional reranking."""
         try:
-            if self.use_reranker and self.hybrid_retriever and self.hybrid_retriever.reranker.is_available():
+            if self.use_reranker and self.compression_retriever:
                 logger.debug("Using hybrid retrieval for search")
-                documents = self.hybrid_retriever.retrieve(query, k=k)
-                
+                # LangChain retrievers are Runnables; prefer invoke() for compatibility.
+                documents = self.compression_retriever.invoke(query)
+
                 results = []
                 for i, doc in enumerate(documents):
                     result = {
@@ -317,47 +344,43 @@ Answer:"""
                         "metadata": doc.metadata,
                         "source": doc.metadata.get("source", "Unknown"),
                         "retrieval_rank": i + 1,
-                        "retrieval_method": "hybrid_reranking"
+                        "retrieval_method": "vector_rerank",
                     }
-                    
-                    # Add reranking score if available
+
                     if "rerank_score" in doc.metadata:
                         result["rerank_score"] = doc.metadata["rerank_score"]
-                    
+
                     results.append(result)
-                
+
                 return results
-                
-            else:
-                logger.debug("Using vector similarity search")
-                try:
-                    documents = self.vector_store_manager.similarity_search_with_score(query, k=k)
-                    logger.debug(f"Retrieved {len(documents)} documents from vector store")
 
-                    results = []
-                    for i, (doc, score) in enumerate(documents):
-                        # Handle fallback embeddings (score = 0.0) or real similarity scores
-                        if float(score) == 0.0:
-                            # Generate realistic similarity based on document ranking
-                            similarity_percentage = max(50, 90 - (i * 10))
-                        else:
-                            # Convert ChromaDB distance to similarity percentage
-                            # ChromaDB cosine distance: 0 = identical, 2 = completely different
-                            similarity_percentage = max(0, min(100, (1 - float(score) / 2) * 100))
+            logger.debug("Using vector similarity search")
+            try:
+                documents = self.vector_store_manager.similarity_search_with_score(query, k=k)
+                logger.debug(f"Retrieved {len(documents)} documents from vector store")
 
-                        results.append({
+                results = []
+                for i, (doc, score) in enumerate(documents):
+                    if float(score) == 0.0:
+                        similarity_percentage = max(50, 90 - (i * 10))
+                    else:
+                        similarity_percentage = max(0, min(100, (1 - float(score) / 2) * 100))
+
+                    results.append(
+                        {
                             "content": doc.page_content,
                             "metadata": doc.metadata,
                             "similarity_score": similarity_percentage,
                             "source": doc.metadata.get("source", "Unknown"),
                             "retrieval_rank": i + 1,
-                            "retrieval_method": "vector_only"
-                        })
+                            "retrieval_method": "vector_only",
+                        }
+                    )
 
-                    return results
-                except Exception as search_error:
-                    logger.error(f"Error in similarity search processing: {search_error}")
-                    return []
+                return results
+            except Exception as search_error:
+                logger.error(f"Error in similarity search processing: {search_error}")
+                return []
 
         except Exception as e:
             logger.error(f"Error during simple retrieval: {e}")
@@ -371,21 +394,20 @@ Answer:"""
             "chain_ready": True, # Changed to True as we use manual logic
             "reranker_enabled": self.use_reranker,
             "reranker_available": False,
-            "embedding_model": "Local embedding model"
+            "embedding_model": os.getenv("EMBEDDING_MODEL_NAME", "Remote embedding (llama.cpp)")
         }
         
         # Test LLM availability
         try:
             test_response = requests.get(f"{self.llm.base_url}/health", timeout=5)
             status["llm_available"] = test_response.status_code == 200
-        except:
+        except requests.exceptions.RequestException:
             status["llm_available"] = False
         
-        # Test reranker availability (currently disabled)
         if self.use_reranker and self.reranker:
             status["reranker_available"] = self.reranker.is_available()
-            status["reranker_model"] = self.reranker.model_name if self.reranker.is_available() else "Not loaded"
+            status["reranker_model"] = self.reranker.model_name if status["reranker_available"] else "Not reachable"
         else:
-            status["reranker_model"] = "Temporarily disabled"
+            status["reranker_model"] = "Disabled"
         
         return status

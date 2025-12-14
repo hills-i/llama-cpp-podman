@@ -22,10 +22,9 @@ class VectorStoreManager:
         self.persist_directory = persist_directory
         self.collection_name = collection_name
         
-        # Initialize embeddings model
-        logger.info("Initializing embeddings...")
-        embedding_model_path = os.getenv("EMBEDDING_MODEL_PATH")
-        self.embeddings = create_embeddings(model_path=embedding_model_path, device="cpu")
+        # Initialize embeddings client (remote llama.cpp embedding service)
+        logger.info("Initializing embeddings via remote service...")
+        self.embeddings = create_embeddings()
         
         # Ensure directory exists
         os.makedirs(persist_directory, exist_ok=True)
@@ -152,9 +151,26 @@ class VectorStoreManager:
         try:
             # Get the ChromaDB collection directly
             collection = self.client.get_collection(self.collection_name)
+
+            # Safety guard: avoid loading/scanning huge collections into memory.
+            max_scan = int(os.getenv("MAX_DELETE_SCAN", "5000"))
+            try:
+                collection_size = int(collection.count())
+            except Exception:
+                collection_size = 0
+
+            if max_scan > 0 and collection_size > max_scan:
+                logger.warning(
+                    "Refusing delete-by-content on large collection",
+                    extra={"collection": self.collection_name, "count": collection_size, "max_scan": max_scan},
+                )
+                raise RuntimeError(
+                    f"delete-by-content disabled for large collections (size={collection_size}). "
+                    "Use /documents to clear all documents or implement a metadata-based delete."
+                )
             
             # Get all documents to search through them
-            results = collection.get(include=['documents', 'metadatas', 'ids'])
+            results = collection.get(include=['documents', 'ids'])
 
             if not results['documents']:
                 logger.info("No documents found in collection")

@@ -1,18 +1,20 @@
 """Document loading and processing utilities for RAG."""
 
-import os
 import json
-from typing import List, Optional
+import logging
+import os
 from pathlib import Path
+from typing import List
 
 from langchain_community.document_loaders import (
-    DirectoryLoader,
     TextLoader,
     PyPDFLoader,
     Docx2txtLoader,
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -31,13 +33,12 @@ class DocumentProcessor:
         """Load and process JSON documents."""
         documents = []
         MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-        MAX_CHUNKS = 1000
 
         try:
             # Check file size before loading
             file_size = os.path.getsize(file_path)
             if file_size > MAX_FILE_SIZE:
-                print(f"JSON file too large: {file_path} ({file_size} bytes)")
+                logger.warning("JSON file too large; skipping", extra={"path": file_path, "size": file_size})
                 return documents
 
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -142,9 +143,9 @@ class DocumentProcessor:
                 documents.append(Document(page_content=content, metadata=metadata))
         
         except json.JSONDecodeError as e:
-            print(f"Invalid JSON in {file_path}: {e}")
+            logger.warning("Invalid JSON; skipping", extra={"path": file_path, "error": str(e)})
         except Exception as e:
-            print(f"Error loading JSON {file_path}: {e}")
+            logger.exception("Error loading JSON", extra={"path": file_path})
         
         return documents
         
@@ -163,9 +164,33 @@ class DocumentProcessor:
         directory_path = Path(directory)
         if not directory_path.exists():
             raise ValueError(f"Directory {directory} does not exist")
+
+        base_dir_resolved = directory_path.resolve()
             
         for file_path in directory_path.rglob("*"):
             if file_path.is_file():
+                # Avoid following symlinks (can escape the allowed base directory)
+                if file_path.is_symlink():
+                    logger.warning("Skipping symlink", extra={"path": str(file_path)})
+                    continue
+
+                try:
+                    resolved_file = file_path.resolve()
+                except OSError as exc:
+                    logger.warning("Skipping unreadable path", extra={"path": str(file_path), "error": str(exc)})
+                    continue
+
+                try:
+                    # Ensure the resolved file stays within the base directory
+                    if os.path.commonpath([str(resolved_file), str(base_dir_resolved)]) != str(base_dir_resolved):
+                        logger.warning(
+                            "Skipping path outside base directory",
+                            extra={"path": str(file_path), "resolved": str(resolved_file), "base": str(base_dir_resolved)},
+                        )
+                        continue
+                except ValueError:
+                    continue
+
                 file_extension = file_path.suffix.lower()
                 
                 if file_extension in loaders:
@@ -188,10 +213,13 @@ class DocumentProcessor:
                                 })
                         
                         documents.extend(file_documents)
-                        print(f"Loaded {len(file_documents)} documents from {file_path}")
+                        logger.info(
+                            "Loaded documents",
+                            extra={"path": str(file_path), "count": len(file_documents)},
+                        )
                         
                     except Exception as e:
-                        print(f"Error loading {file_path}: {e}")
+                        logger.exception("Error loading document", extra={"path": str(file_path)})
                         
         return documents
     
@@ -203,12 +231,15 @@ class DocumentProcessor:
         """Load and split documents from a directory."""
         documents = self.load_documents(directory)
         if not documents:
-            print(f"No documents loaded from {directory}")
+            logger.info("No documents loaded", extra={"directory": directory})
             return []
             
-        print(f"Loaded {len(documents)} documents, splitting into chunks...")
+        logger.info(
+            "Splitting documents into chunks",
+            extra={"directory": directory, "documents": len(documents)},
+        )
         chunks = self.split_documents(documents)
-        print(f"Created {len(chunks)} document chunks")
+        logger.info("Created document chunks", extra={"chunks": len(chunks)})
         
         return chunks
 

@@ -15,7 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
-COPY documents/ ./documents/
+
+# Create documents and data directories (documents are typically mounted at runtime)
+RUN mkdir -p /app/documents
 
 # Create data directory for ChromaDB
 RUN mkdir -p /app/data

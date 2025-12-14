@@ -139,19 +139,41 @@ function handleSubmit({
                 throw new Error(data.error?.message || errorMsg);
             }
 
-            let result = data.choices[0].message.content;
-            result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            result = result.replace(/```([\s\S]*?)```/g, (_, code) => `<blockquote>${code}</blockquote>`);
-            responseDiv.innerHTML = result;
+            const rawText = data?.choices?.[0]?.message?.content ?? '';
+
+            // Escape first, then apply a tiny, safe subset of formatting.
+            // This ensures untrusted model output never becomes executable HTML.
+            const escaped = escapeHtml(rawText);
+            const formatted = formatSafeResponseHtml(escaped);
+            responseDiv.innerHTML = formatted;
             copyBtn.classList.remove('hidden');
         } catch (error) {
-            responseDiv.innerHTML = `Error: ${error.message}`;
+            responseDiv.textContent = `Error: ${error.message}`;
             responseDiv.classList.add('error-text');
         } finally {
             loadingDiv.classList.add('hidden');
             submitBtn.disabled = false;
         }
     };
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text ?? '';
+    return div.innerHTML;
+}
+
+function formatSafeResponseHtml(escapedText) {
+    // Input must already be HTML-escaped.
+    // 1) Code fences ```...``` -> <pre><code>...</code></pre>
+    // 2) Bold **...** -> <strong>...</strong>
+    // 3) Newlines -> <br>
+    let html = String(escapedText);
+
+    html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code}</code></pre>`);
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\n/g, '<br>');
+    return html;
 }
 
 function initProofreadUI(prompt_template_1, prompt_template_2) {
@@ -239,14 +261,23 @@ function loadSideMenu(menuPath = 'json/sidemenu.json') {
         fetch(menuPath)
             .then(res => res.json())
             .then(links => {
-                sidemenu.innerHTML = '<nav class="sidemenu">' +
-                    links.map(link =>
-                        `<a href="${link.href}">${link.label}</a>`
-                    ).join('') +
-                    '</nav>';
+                // Build DOM safely (no HTML injection from JSON).
+                sidemenu.textContent = '';
+
+                const nav = document.createElement('nav');
+                nav.className = 'sidemenu';
+
+                (Array.isArray(links) ? links : []).forEach(link => {
+                    const a = document.createElement('a');
+                    a.href = String(link?.href ?? '#');
+                    a.textContent = String(link?.label ?? '');
+                    nav.appendChild(a);
+                });
+
+                sidemenu.appendChild(nav);
             })
             .catch(() => {
-                sidemenu.innerHTML = 'Menu failed to load';
+                sidemenu.textContent = 'Menu failed to load';
             });
     });
 }

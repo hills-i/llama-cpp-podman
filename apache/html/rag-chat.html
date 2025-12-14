@@ -638,10 +638,10 @@
                     setTimeout(checkSystemStatus, 1000);
                     addMessage('assistant', `📁 Successfully uploaded ${files.length} document(s). You can now ask questions about them!`);
                 } else {
-                    uploadStatus.innerHTML = `<div style="color: #f88;">❌ ${result.detail}</div>`;
+                    uploadStatus.innerHTML = `<div style="color: #f88;">❌ ${escapeHtml(result.detail)}</div>`;
                 }
             } catch (error) {
-                uploadStatus.innerHTML = `<div style="color: #f88;">❌ Upload failed: ${error.message}</div>`;
+                uploadStatus.innerHTML = `<div style="color: #f88;">❌ Upload failed: ${escapeHtml(error.message)}</div>`;
             }
         }
 
@@ -715,8 +715,15 @@
             chatMessages.appendChild(messageDiv);
         }
 
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
+
         function formatText(text) {
-            return text.replace(/\n/g, '<br>').replace(/  /g, '&nbsp;&nbsp;');
+            const escaped = escapeHtml(text);
+            return escaped.replace(/\n/g, '<br>').replace(/  /g, '&nbsp;&nbsp;');
         }
     </script>
 </body>

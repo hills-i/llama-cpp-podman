@@ -6,8 +6,8 @@ metadata:
 data:
   # Model Configuration
   MODEL_DIRECTORY: /models
-  EMBEDDING_MODEL_PATH: /app/models/embedding/Qwen3-Embedding-0.6B
-  RERANKER_MODEL_PATH: /app/models/reranker/bge-reranker-v2-m3
+  EMBEDDING_MODEL_NAME: Qwen3-Embedding-0.6B-Q8_0
+  RERANK_MODEL_NAME: qwen3-reranker-0.6b-q8_0
   # File Upload Security Limits
   MAX_FILE_SIZE_MB: "10"
   MAX_UPLOAD_SIZE_MB: "50"
@@ -49,6 +49,14 @@ spec:
         - 0.0.0.0
         - -n
         - "4096"
+        - -c
+        - "8192"
+        - -np
+        - "4"
+        - -sps
+        - "0.5"
+        - --cache-reuse
+        - "128"
        # --- CORRECTED LIVENESS PROBE ---
         livenessProbe:
           exec:
@@ -105,7 +113,20 @@ spec:
         image: rag-service:latest
         env:
         - name: LLAMA_CPP_BASE_URL
-          value: "http://llama-cpp-server-service:11434"
+          # Podman play kube resolves the pod/deployment name (e.g. 'llama-cpp-server'),
+          # but not the Kubernetes Service name 'llama-cpp-server-service'.
+          value: "http://llama-cpp-server:11434"
+        - name: LLAMA_CPP_MODEL_NAME
+          # Use the model id returned by llama.cpp /v1/models (not the .gguf filename).
+          value: "Qwen3-0.6B-Q8_0"
+        - name: EMBEDDING_API_BASE
+          value: "http://embedding-service:8080/v1"
+        - name: RERANK_API_BASE
+          value: "http://rerank-service:8080/v1"
+        - name: RETRIEVAL_CANDIDATES
+          value: "50"
+        - name: RERANK_TOP_K
+          value: "5"
         envFrom:
         - configMapRef:
             name: model-config
@@ -155,8 +176,122 @@ spec:
   - protocol: TCP
     port: 8080
     targetPort: 8080
+
 ---
-# 5. apache Deployment
+# 5. embedding-service Deployment (llama.cpp --embedding)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service-deployment
+  labels:
+    app: embedding-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-service
+  template:
+    metadata:
+      labels:
+        app: embedding-service
+    spec:
+      containers:
+      - name: embedding-service
+        image: ghcr.io/ggml-org/llama.cpp:server
+        envFrom:
+        - configMapRef:
+            name: model-config
+        args:
+        - --model
+        - /models/$(EMBEDDING_MODEL_NAME).gguf # TODO: replace with actual embedding GGUF filename
+        - --embedding
+        - --port
+        - "8080"
+        - --host
+        - 0.0.0.0
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - mountPath: /models
+          name: shared-models
+      volumes:
+      - name: shared-models
+        hostPath:
+          path: ./rag-service/models/embedding
+          type: Directory
+
+---
+# 6. embedding-service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-service
+spec:
+  selector:
+    app: embedding-service
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+
+---
+# 7. rerank-service Deployment (llama.cpp --reranking)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rerank-service-deployment
+  labels:
+    app: rerank-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rerank-service
+  template:
+    metadata:
+      labels:
+        app: rerank-service
+    spec:
+      containers:
+      - name: rerank-service
+        image: ghcr.io/ggml-org/llama.cpp:server
+        envFrom:
+        - configMapRef:
+            name: model-config
+        args:
+        - --model
+        - /models/$(RERANK_MODEL_NAME).gguf # TODO: replace with actual reranker GGUF filename
+        - --reranking
+        - --port
+        - "8080"
+        - --host
+        - 0.0.0.0
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - mountPath: /models
+          name: shared-models
+      volumes:
+      - name: shared-models
+        hostPath:
+          path: ./rag-service/models/reranker
+          type: Directory
+
+---
+# 8. rerank-service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rerank-service
+spec:
+  selector:
+    app: rerank-service
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+---
+# 9. apache Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -219,7 +354,7 @@ spec:
           path: ./apache/html
           type: Directory
 ---
-# 4. NetworkPolicy
+    # 10. NetworkPolicy: llama-cpp-server ingress/egress
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -255,3 +390,91 @@ spec:
       - podSelector:
           matchLabels:
             app: apache
+
+---
+# 11. NetworkPolicy: embedding-service ingress from rag-service only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: embedding-service-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: embedding-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+      - podSelector:
+          matchLabels:
+            app: rag-service
+      ports:
+      - protocol: TCP
+        port: 8080
+
+---
+# 12. NetworkPolicy: rerank-service ingress from rag-service only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rerank-service-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: rerank-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+      - podSelector:
+          matchLabels:
+            app: rag-service
+      ports:
+      - protocol: TCP
+        port: 8080
+
+---
+# 13. NetworkPolicy: rag-service egress only to LLM, embedding, rerank, DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rag-service-egress-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: rag-service
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    # llama-cpp-server
+    - to:
+      - podSelector:
+          matchLabels:
+            app: llama-cpp-server
+      ports:
+      - protocol: TCP
+        port: 11434
+    # embedding-service
+    - to:
+      - podSelector:
+          matchLabels:
+            app: embedding-service
+      ports:
+      - protocol: TCP
+        port: 8080
+    # rerank-service
+    - to:
+      - podSelector:
+          matchLabels:
+            app: rerank-service
+      ports:
+      - protocol: TCP
+        port: 8080

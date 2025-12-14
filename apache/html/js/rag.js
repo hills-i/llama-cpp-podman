@@ -94,7 +94,7 @@ async function checkSystemStatus() {
         statusInfo.innerHTML = `
             <div class="error">
                 ❌ Unable to connect to RAG service<br>
-                <small>Error: ${error.message}</small><br>
+                <small>Error: ${escapeHtml(error.message)}</small><br>
                 <small>Check if services are running: <code>podman ps</code></small>
             </div>
         `;
@@ -141,7 +141,7 @@ function displaySystemStatus(status) {
     if (status.embedding_model) {
         statusHTML += `
             <div class="status-item info">
-                <strong>Embedding:</strong> ${status.embedding_model}
+                <strong>Embedding:</strong> ${escapeHtml(status.embedding_model)}
             </div>
         `;
     }
@@ -159,7 +159,7 @@ function displaySystemStatus(status) {
         if (status.reranker_model && status.reranker_model !== 'Disabled') {
             statusHTML += `
                 <div class="status-item info">
-                    <strong>Reranker Model:</strong> ${status.reranker_model}
+                    <strong>Reranker Model:</strong> ${escapeHtml(status.reranker_model)}
                 </div>
             `;
         }
@@ -300,17 +300,21 @@ function displaySources(sources) {
     let sourcesHTML = '<div class="sources-list">';
 
     sources.forEach((source, index) => {
+        const safeSourceName = escapeHtml(source.source || 'Unknown');
+        const safeFileType = escapeHtml(source.metadata?.file_type || 'unknown');
+        const safeMethod = escapeHtml(source.retrieval_method || '');
+
         sourcesHTML += `
             <div class="source-item">
                 <div class="source-header">
-                    <strong>Source ${index + 1}:</strong> ${source.source || 'Unknown'}
+                    <strong>Source ${index + 1}:</strong> ${safeSourceName}
                     ${source.rerank_score ? `<span class="rerank-score">Rerank: ${source.rerank_score.toFixed(3)}</span>` : ''}
                 </div>
                 <div class="source-content">${formatText(source.content)}</div>
                 <div class="source-metadata">
-                    ${source.metadata ? `Type: ${source.metadata.file_type || 'unknown'} • ` : ''}
+                    ${source.metadata ? `Type: ${safeFileType} • ` : ''}
                     Rank: ${source.retrieval_rank || index + 1}
-                    ${source.retrieval_method ? ` • Method: ${source.retrieval_method}` : ''}
+                    ${source.retrieval_method ? ` • Method: ${safeMethod}` : ''}
                 </div>
             </div>
         `;
@@ -396,6 +400,7 @@ function displaySearchResults(results) {
     let resultsHTML = '<div class="search-results-list">';
 
     processedResults.forEach((result, displayIndex) => {
+        const safeSource = escapeHtml(result.metadata?.source || result.source || 'Unknown');
         resultsHTML += `
             <div class="search-result-item">
                 <div class="result-header">
@@ -403,7 +408,7 @@ function displaySearchResults(results) {
                     <span class="similarity-score">Similarity: ${result.calculatedScore}%</span>
                 </div>
                 <div class="result-content">${formatText(result.content)}</div>
-                <div class="result-source">Source: ${result.metadata?.source || result.source || 'Unknown'}</div>
+                <div class="result-source">Source: ${safeSource}</div>
             </div>
         `;
     });
@@ -468,12 +473,12 @@ function calculateFallbackSimilarity(query, content, index) {
 }
 
 function displaySearchError(message) {
-    searchResults.innerHTML = `<p class="error">${message}</p>`;
+    searchResults.innerHTML = `<p class="error">${escapeHtml(message)}</p>`;
     searchResults.style.display = 'block';
 }
 
 function displayError(message) {
-    responseContent.innerHTML = `<div class="error">${message}</div>`;
+    responseContent.innerHTML = `<div class="error">${escapeHtml(message)}</div>`;
     responseSection.style.display = 'block';
     copyResponseBtn.classList.add('hidden');
     sourcesSection.style.display = 'none';
@@ -487,7 +492,8 @@ function clearResponse() {
 }
 
 function showUploadStatus(message, type) {
-    uploadStatus.innerHTML = `<div class="${type}">${message}</div>`;
+    const safeType = ['success', 'error', 'info'].includes(type) ? type : 'info';
+    uploadStatus.innerHTML = `<div class="${safeType}">${escapeHtml(message)}</div>`;
 }
 
 function showLoading(message) {

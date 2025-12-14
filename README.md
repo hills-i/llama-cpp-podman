@@ -27,6 +27,9 @@ mkdir -p apache/certs models rag-service/documents rag-service/data/chroma_db ra
 # Set SELinux context (if SELinux is enabled on RHEL/Fedora/CentOS)
 # chcon -Rt container_file_t ./rag-service/data/
 # chcon -Rt container_file_t ./apache/certs/
+# chcon -Rt container_file_t ./apache/conf/
+# chcon -Rt container_file_t ./apache/html/
+# chcon -Rt container_file_t ./apache/logs/
 # chcon -Rt container_file_t ./models/
 
 # Generate SSL certificates
@@ -38,13 +41,13 @@ chmod 600 apache/certs/server.key
 chmod 644 apache/certs/server.crt
 
 # Download your GGUF model to models/ directory
-wget https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf -O models/qwen2.5-0.5b-instruct-q8_0.gguf
+wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf -O models/Qwen3-0.6B-Q8_0.gguf
 
-# Download embedding and reranker models
-cd rag-service/models
-git clone https://huggingface.co/Qwen/Qwen3-Embedding-0.6B embedding
-git clone https://huggingface.co/BAAI/bge-reranker-v2-m3 reranker
-cd ../..
+# Add embedding and reranker GGUF files
+# Place the files under:
+#   rag-service/models/embedding/$(EMBEDDING_MODEL_NAME).gguf
+#   rag-service/models/reranker/$(RERANK_MODEL_NAME).gguf
+# Names are configured in kube.yaml (model-config ConfigMap).
 ```
 
 ### 2. Start Services
@@ -71,8 +74,8 @@ graph TB
     B -->|Proxy| C[llama.cpp Server]
     B -->|Proxy /rag/*| D[RAG Service]
     C -->|Model Inference| E[GGUF Models]
-    D -->|Embeddings| F[Qwen3-Embedding]
-    D -->|Reranking| G[BGE-reranker-v2-m3]
+    D -->|Embeddings| F[llama.cpp embedding-service]
+    D -->|Reranking| G[llama.cpp rerank-service]
     D -->|Vector Store| H[ChromaDB]
     D -->|LLM Calls| C
     
@@ -121,7 +124,7 @@ llama-cpp/
 │   │   └── document_loader.py
 │   ├── documents/            # Input documents (excluded from git)
 │   ├── data/                 # Vector database (excluded from git)
-│   ├── models/               # Embedding models (excluded from git)
+│   ├── models/               # Embedding and rerank models (excluded from git)
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── README-RAG.md         # RAG-specific documentation
@@ -176,7 +179,7 @@ tar -czf rag-backup-$(date +%Y%m%d).tar.gz rag-service/data/
 rm -rf rag-service/data/chroma_db/
 
 # View document stats
-curl -k -u user:pass https://localhost:8443/rag/status | jq '.documents'
+curl -k -u user:pass https://localhost:8443/rag/status | jq '.vector_store.document_count'
 ```
 
 ## ⚙️ Configuration
@@ -194,6 +197,13 @@ args:
 - /models
 ```
 
+The RAG service uses these key environment variables (see kube.yaml):
+- `LLAMA_CPP_BASE_URL` (default: `http://llama-cpp-server:11434`)
+- `LLAMA_CPP_MODEL_NAME` (model id from llama.cpp `/v1/models`)
+- `EMBEDDING_API_BASE` / `EMBEDDING_MODEL_NAME`
+- `RERANK_API_BASE` / `RERANK_MODEL_NAME`
+- `RETRIEVAL_CANDIDATES` / `RERANK_TOP_K`
+
 ## 🧠 RAG System Deep Dive
 
 ### Pipeline Architecture
@@ -203,16 +213,17 @@ args:
 
 ### Models Used
 
-- **Embedding**: Qwen3-Embedding-0.6B (1024-dim, multilingual)
-- **Reranker**: BGE-reranker-v2-m3 (CrossEncoder, multilingual)
+- **Embedding**: GGUF served by llama.cpp embedding-service (`/v1/embeddings`)
+- **Reranker**: GGUF served by llama.cpp rerank-service (`/v1/rerank`)
 - **LLM**: Your GGUF model via llama.cpp
 
 ### Dependencies
 
-The RAG service uses LangChain 0.2.16+ with modular packages:
-- `langchain>=1.1.3`
-- `langchain-community>=0.4.1`
-- `langchain-core>=1.1.2`
+The RAG service uses LangChain 1.1.x with modular packages (see rag-service/requirements.txt):
+- `langchain==1.1.3`
+- `langchain-classic==1.0.0`
+- `langchain-community==0.4.1`
+- `langchain-core==1.1.3`
 
 All imports have been updated to use the new package structure to avoid deprecation warnings.
 
@@ -226,7 +237,7 @@ All imports have been updated to use the new package structure to avoid deprecat
 ```bash
 # System Status
 GET /rag/status
-Response: {"status": "healthy", "documents": 42, "models_loaded": true}
+Response: {"status": "ready", "vector_store": {"document_count": 42, ...}, "llm_available": true, "chain_ready": true}
 
 # Query with RAG
 POST /rag/query
@@ -235,21 +246,27 @@ Response: {"answer": "...", "sources": [...]}
 
 # Document Search
 POST /rag/search  
-Body: {"query": "machine learning", "k": 5}
-Response: {"documents": [...]}
+Body: {"question": "machine learning", "k": 5}
+Response: [{"content": "...", "metadata": {...}, "similarity_score": 87.0, ...}]
 
 # Upload Documents
 POST /rag/upload
-Form: file=@document.pdf
-Response: {"message": "Document uploaded successfully"}
+Form: files=@document.pdf
+Response: {"message": "Successfully uploaded and processed 1 files", "documents_added": 12, "file_names": ["document.pdf"]}
 
 # Bulk Ingest
 POST /rag/ingest
-Response: {"processed": 15, "failed": 0}
+Form: directory_path=/app/documents
+Response: {"message": "Successfully ingested documents from /app/documents", "documents_added": 12, "directory": "/app/documents"}
 
 # Clear Database
 DELETE /rag/documents
 Response: {"message": "All documents cleared"}
+
+# Delete by content
+POST /rag/documents/delete-by-content
+Body: {"content_query": "partial text"}
+Response: {"deleted_count": 1, ...}
 ```
 
 #### LLM Endpoints
@@ -340,7 +357,6 @@ podman play kube --network isolated kube.yaml
 sudo ufw allow 8443/tcp   # HTTPS only
 sudo ufw deny 8080/tcp    # Block HTTP
 sudo ufw deny 11434/tcp   # Block direct LLM access
-sudo ufw deny 8081/tcp    # Block direct RAG access
 ```
 
 **Security Checklist:**
@@ -371,11 +387,12 @@ podman play kube kube.yaml
 # Upload directory of documents
 for file in /path/to/docs/*; do
     curl -k -u user:pass -X POST https://localhost:8443/rag/upload \
-         -F "file=@$file"
+         -F "files=@$file"
 done
 
 # Or use the ingest endpoint for documents/ directory
-curl -k -u user:pass -X POST https://localhost:8443/rag/ingest
+curl -k -u user:pass -X POST https://localhost:8443/rag/ingest \
+    -F "directory_path=/app/documents"
 ```
 
 ### API Integration Examples
@@ -406,7 +423,7 @@ class LlamaRAGClient:
         with open(file_path, 'rb') as f:
             response = self.session.post(
                 f"{self.base_url}/rag/upload",
-                files={"file": f},
+                files={"files": f},
                 auth=self.auth
             )
         return response.json()
@@ -447,7 +464,7 @@ podman play kube kube.yaml
 
 ```bash
 # Verify password file
-cat apache/conf/.htpasswd
+cat apache/.htpasswd
 
 # Recreate with new password
 python3 -c "
@@ -455,7 +472,7 @@ import crypt
 password = 'pass'
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 print(f'user:{encrypted}')
-" > apache/conf/.htpasswd
+" > apache/.htpasswd
 
 # Test authentication
 curl -k -u user:pass https://localhost:8443/health
@@ -470,8 +487,8 @@ curl -k -u user:pass https://localhost:8443/health
 # Check model file exists
 ls -la models/
 
-# Verify model path in config
-grep MODEL_FILE kube.yaml
+# Verify model configuration in kube.yaml
+grep -E "MODEL_DIRECTORY|LLAMA_CPP_MODEL_NAME|EMBEDDING_MODEL_NAME|RERANK_MODEL_NAME" kube.yaml
 
 # Check llama.cpp logs for errors
 podman logs llama-cpp-server-deployment-pod-llama-cpp-server | grep -i error
@@ -492,7 +509,7 @@ ls -la rag-service/models/embedding/
 ls -la rag-service/models/reranker/
 
 # Test RAG service directly
-curl -k http://localhost:8081/rag/status
+curl -k -u user:pass https://localhost:8443/rag/status
 
 # Clear and rebuild vector store
 rm -rf rag-service/data/chroma_db/

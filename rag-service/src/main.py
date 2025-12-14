@@ -7,9 +7,10 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .document_loader import DocumentProcessor, load_sample_documents
 from .vector_store import VectorStoreManager
@@ -41,10 +42,19 @@ def validate_path(path: str) -> str:
     real_path = os.path.realpath(os.path.abspath(path))
 
     for allowed_base in ALLOWED_DOCUMENT_PATHS:
+        if not allowed_base:
+            continue
         allowed_real = os.path.realpath(os.path.abspath(allowed_base))
-        if real_path.startswith(allowed_real):
-            logger.info(f"Path validated: {real_path}")
-            return real_path
+
+        # Prevent prefix-bypass issues like "/app/documents_evil" matching "/app/documents".
+        # commonpath is robust across path separators.
+        try:
+            if os.path.commonpath([real_path, allowed_real]) == allowed_real:
+                logger.info(f"Path validated: {real_path}")
+                return real_path
+        except ValueError:
+            # Different drives / invalid paths on some platforms
+            continue
 
     logger.warning(f"Path traversal blocked: {path}")
     raise HTTPException(
@@ -71,7 +81,7 @@ def sanitize_error(exc: Exception, error_id: str = None) -> dict:
 class QueryRequest(BaseModel):
     question: str
     include_sources: bool = True
-    k: int = 4
+    k: int = Field(default=4, ge=1, le=50)
 
 
 class QueryResponse(BaseModel):
@@ -101,11 +111,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS: Allow all origins (already protected by Apache Basic Auth)
+# CORS:
+# - Default to same-origin (no CORS) since Apache proxies UI and API on one origin.
+# - If you need browser cross-origin access, set CORS_ALLOW_ORIGINS to a comma-separated allowlist.
+cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "")
+cors_allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
+# Never allow credentialed requests with wildcard origins.
+cors_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+if not cors_allow_origins:
+    cors_allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -114,6 +134,14 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler with error sanitization."""
+    # Preserve HTTPException semantics (status codes + client-facing detail)
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    # Preserve FastAPI validation errors (422)
+    if isinstance(exc, RequestValidationError):
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
     error_response = sanitize_error(exc)
     return JSONResponse(
         status_code=500,
@@ -137,7 +165,11 @@ async def startup_event():
     vector_store_manager = VectorStoreManager()
 
     # Initialize RAG chain with reranker enabled
-    rag_chain = RAGChain(vector_store_manager, use_reranker=True)
+    rag_chain = RAGChain(
+        vector_store_manager,
+        use_reranker=True,
+        llama_base_url=os.getenv("LLAMA_CPP_BASE_URL"),
+    )
 
     # Load sample documents if no documents exist
     collection_info = vector_store_manager.get_collection_info()
@@ -183,17 +215,12 @@ async def query_rag(request: QueryRequest):
     """Query the RAG system."""
     if not rag_chain:
         raise HTTPException(status_code=503, detail="RAG system not initialized")
-    
-    try:
-        result = rag_chain.query(
-            question=request.question,
-            include_sources=request.include_sources
-        )
-        
-        return QueryResponse(**result)
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
+    result = rag_chain.query(
+        question=request.question,
+        include_sources=request.include_sources,
+    )
+    return QueryResponse(**result)
 
 
 @app.post("/search", response_model=List[DocumentInfo])
@@ -201,14 +228,9 @@ async def search_documents(request: QueryRequest):
     """Search for similar documents without generation."""
     if not rag_chain:
         raise HTTPException(status_code=503, detail="RAG system not initialized")
-    
-    try:
-        results = rag_chain.simple_retrieval(request.question, k=request.k)
-        
-        return [DocumentInfo(**result) for result in results]
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+    results = rag_chain.simple_retrieval(request.question, k=request.k)
+    return [DocumentInfo(**result) for result in results]
 
 
 @app.post("/upload")
@@ -216,6 +238,8 @@ async def upload_documents(files: List[UploadFile] = File(...)):
     """Upload documents to the knowledge base."""
     if not vector_store_manager:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
+
+    chunk_size_bytes = int(os.getenv("UPLOAD_CHUNK_SIZE_BYTES", str(1024 * 1024)))
 
     # Validate file count
     if len(files) > MAX_FILES_PER_UPLOAD:
@@ -226,7 +250,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 
     # Create temporary directory for uploaded files
     upload_dir = Path("/tmp/rag_uploads")
-    upload_dir.mkdir(exist_ok=True)
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded_files = []
     total_size = 0
@@ -242,29 +266,43 @@ async def upload_documents(files: List[UploadFile] = File(...)):
                     detail=f"File type {file_ext} not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
                 )
 
-            # Read and validate file size
-            content = await file.read()
-            file_size = len(content)
+            # Save file (sanitize filename to avoid path traversal)
+            original_name = file.filename or ""
+            safe_name = Path(original_name).name
+            if not safe_name or safe_name in {".", ".."}:
+                raise HTTPException(status_code=400, detail="Invalid filename")
 
-            if file_size > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File {file.filename} exceeds {MAX_FILE_SIZE_MB}MB limit"
-                )
+            file_path = upload_dir / f"{uuid.uuid4().hex}_{safe_name}"
+            resolved_target = file_path.resolve()
+            if os.path.commonpath([str(resolved_target), str(upload_dir.resolve())]) != str(upload_dir.resolve()):
+                raise HTTPException(status_code=400, detail="Invalid upload path")
 
-            total_size += file_size
-            if total_size > MAX_UPLOAD_SIZE:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Total upload size exceeds {MAX_UPLOAD_SIZE_MB}MB limit"
-                )
-
-            # Save file
-            file_path = upload_dir / file.filename
+            # Stream file to disk while enforcing per-file and total size limits.
+            bytes_written = 0
             with open(file_path, "wb") as buffer:
-                buffer.write(content)
+                while True:
+                    chunk = await file.read(chunk_size_bytes)
+                    if not chunk:
+                        break
+
+                    bytes_written += len(chunk)
+                    if bytes_written > MAX_FILE_SIZE:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File {safe_name} exceeds {MAX_FILE_SIZE_MB}MB limit",
+                        )
+
+                    total_size += len(chunk)
+                    if total_size > MAX_UPLOAD_SIZE:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Total upload size exceeds {MAX_UPLOAD_SIZE_MB}MB limit",
+                        )
+
+                    buffer.write(chunk)
+
             uploaded_files.append(str(file_path))
-            logger.info(f"Uploaded: {file.filename} ({file_size} bytes)")
+            logger.info(f"Uploaded: {safe_name} ({bytes_written} bytes)")
         
         # Process documents
         documents = document_processor.process_directory(str(upload_dir))
@@ -284,17 +322,14 @@ async def upload_documents(files: List[UploadFile] = File(...)):
                 "documents_added": 0,
                 "file_names": [file.filename for file in files]
             }
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-    
+
     finally:
         # Clean up temporary files
         for file_path in uploaded_files:
             try:
                 os.remove(file_path)
-            except:
-                pass
+            except OSError as exc:
+                logger.warning("Failed to remove temp upload", extra={"path": file_path, "error": str(exc)})
 
 
 @app.post("/ingest")
@@ -309,26 +344,21 @@ async def ingest_directory(directory_path: str = Form(...)):
     if not os.path.exists(validated_path):
         raise HTTPException(status_code=400, detail="Directory does not exist")
 
-    try:
-        documents = document_processor.process_directory(validated_path)
-        
-        if documents:
-            ids = vector_store_manager.add_documents(documents)
-            
-            return {
-                "message": f"Successfully ingested documents from {directory_path}",
-                "documents_added": len(documents),
-                "directory": directory_path
-            }
-        else:
-            return {
-                "message": f"No processable documents found in {directory_path}",
-                "documents_added": 0,
-                "directory": directory_path
-            }
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+    documents = document_processor.process_directory(validated_path)
+
+    if documents:
+        vector_store_manager.add_documents(documents)
+        return {
+            "message": f"Successfully ingested documents from {directory_path}",
+            "documents_added": len(documents),
+            "directory": directory_path,
+        }
+
+    return {
+        "message": f"No processable documents found in {directory_path}",
+        "documents_added": 0,
+        "directory": directory_path,
+    }
 
 
 @app.delete("/documents")
@@ -337,12 +367,8 @@ async def clear_documents():
     if not vector_store_manager:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
     
-    try:
-        vector_store_manager.delete_collection()
-        return {"message": "All documents cleared successfully"}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Clear failed: {str(e)}")
+    vector_store_manager.delete_collection()
+    return {"message": "All documents cleared successfully"}
 
 
 class DeleteByContentRequest(BaseModel):
@@ -355,24 +381,20 @@ async def delete_document_by_content(request: DeleteByContentRequest):
     if not vector_store_manager:
         raise HTTPException(status_code=503, detail="Vector store not initialized")
     
-    try:
-        deleted_count = vector_store_manager.delete_documents_by_content(request.content_query)
-        
-        if deleted_count > 0:
-            return {
-                "message": f"Successfully deleted {deleted_count} document(s)",
-                "deleted_count": deleted_count,
-                "content_query": request.content_query
-            }
-        else:
-            return {
-                "message": "No documents found matching the content query",
-                "deleted_count": 0,
-                "content_query": request.content_query
-            }
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+    deleted_count = vector_store_manager.delete_documents_by_content(request.content_query)
+
+    if deleted_count > 0:
+        return {
+            "message": f"Successfully deleted {deleted_count} document(s)",
+            "deleted_count": deleted_count,
+            "content_query": request.content_query,
+        }
+
+    return {
+        "message": "No documents found matching the content query",
+        "deleted_count": 0,
+        "content_query": request.content_query,
+    }
 
 
 if __name__ == "__main__":
