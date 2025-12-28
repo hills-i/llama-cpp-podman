@@ -1,4 +1,9 @@
-# 0. ConfigMap for environment variables (sync with config/.env)
+# 0. ConfigMap for non-secret environment variables
+#
+# Policy (keep it simple):
+# - Shared, non-sensitive settings live in this ConfigMap and are injected via envFrom.
+# - Secrets (passwords/tokens) live in a Secret and are injected via env.
+# - Pod-specific one-off settings can stay in the individual Deployment when it improves clarity.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,6 +13,25 @@ data:
   MODEL_DIRECTORY: /models
   EMBEDDING_MODEL_NAME: Qwen3-Embedding-0.6B-Q8_0
   RERANK_MODEL_NAME: qwen3-reranker-0.6b-q8_0
+  # RAG Service Configuration (non-secret)
+  # Podman play kube resolves the pod/deployment name (e.g. 'llama-cpp-server'),
+  # but not the Kubernetes Service name 'llama-cpp-server-service'.
+  LLAMA_CPP_BASE_URL: "http://llama-cpp-server:11434"
+  # Use the model id returned by llama.cpp /v1/models (not the .gguf filename).
+  LLAMA_CPP_MODEL_NAME: "Qwen3-0.6B-Q8_0"
+  EMBEDDING_API_BASE: "http://embedding-service:8080/v1"
+  RERANK_API_BASE: "http://rerank-service:8080/v1"
+  RETRIEVAL_CANDIDATES: "50"
+  RERANK_TOP_K: "5"
+  # MCP Bridge Configuration (non-secret)
+  LLM_BASE_URL: "http://llama-cpp-server:11434/v1"
+  LLM_MODEL: "Qwen3-0.6B-Q8_0"
+  # For local llama.cpp OpenAI-compatible server, any non-empty key is fine.
+  # If you later use a real remote provider, move this to a Secret.
+  OPENAI_API_KEY: "local"
+  PG_HOST: "postgresql"
+  PG_PORT: "5432"
+  PG_DATABASE: "test"
   # File Upload Security Limits
   MAX_FILE_SIZE_MB: "10"
   MAX_UPLOAD_SIZE_MB: "50"
@@ -16,6 +40,21 @@ data:
   ALLOWED_DOCUMENT_PATHS: /app/documents,/tmp/rag_uploads
   # Logging
   LOG_LEVEL: INFO
+---
+# 0.5 Secret for PostgreSQL credentials (local development defaults)
+# For production: create this Secret separately and DO NOT commit real passwords.
+# Example: kubectl create secret generic postgresql-credentials --from-literal=...
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-credentials
+type: Opaque
+stringData:
+  # PostgreSQL superuser password (used by postgres container)
+  POSTGRES_PASSWORD: "postgres"
+  # Application user credentials (created by init.sql)
+  PG_USER: "appuser"
+  PG_PASSWORD: "apppassword"
 ---
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
@@ -111,22 +150,6 @@ spec:
       containers:
       - name: rag-service
         image: rag-service:latest
-        env:
-        - name: LLAMA_CPP_BASE_URL
-          # Podman play kube resolves the pod/deployment name (e.g. 'llama-cpp-server'),
-          # but not the Kubernetes Service name 'llama-cpp-server-service'.
-          value: "http://llama-cpp-server:11434"
-        - name: LLAMA_CPP_MODEL_NAME
-          # Use the model id returned by llama.cpp /v1/models (not the .gguf filename).
-          value: "Qwen3-0.6B-Q8_0"
-        - name: EMBEDDING_API_BASE
-          value: "http://embedding-service:8080/v1"
-        - name: RERANK_API_BASE
-          value: "http://rerank-service:8080/v1"
-        - name: RETRIEVAL_CANDIDATES
-          value: "50"
-        - name: RERANK_TOP_K
-          value: "5"
         envFrom:
         - configMapRef:
             name: model-config
@@ -290,6 +313,126 @@ spec:
   - protocol: TCP
     port: 8080
     targetPort: 8080
+
+---
+# 8.5 postgresql Deployment (optional: for MCP DB tools)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql-deployment
+  labels:
+    app: postgresql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+      - name: postgresql
+        image: docker.io/library/postgres:18
+        env:
+        - name: POSTGRES_DB
+          value: "test"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRES_PASSWORD
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        # Postgres runs scripts in /docker-entrypoint-initdb.d only on first init
+        # (i.e., when the data directory is empty). If you need to re-apply
+        # init.sql, delete the hostPath directory mounted at postgresql-data.
+        - name: postgresql-init-sql
+          mountPath: /docker-entrypoint-initdb.d/00-init.sql
+        - name: postgresql-data
+          # Postgres 18+ stores PGDATA in a major-version-specific subdirectory.
+          # The recommended configuration is to mount /var/lib/postgresql (not /var/lib/postgresql/data).
+          mountPath: /var/lib/postgresql
+      volumes:
+      - name: postgresql-init-sql
+        hostPath:
+          path: ./mcp-script/postgresql/init.sql
+          type: File
+      - name: postgresql-data
+        hostPath:
+          # Separate from older layouts that mounted /var/lib/postgresql/data.
+          path: ./mcp-script/postgresql-data
+          type: DirectoryOrCreate
+
+---
+# 8.6 postgresql Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+spec:
+  selector:
+    app: postgresql
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+
+---
+# 8.7 MCP bridge Deployment (interactive; exec into pod for TTY)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-bridge-deployment
+  labels:
+    app: mcp-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-bridge
+  template:
+    metadata:
+      labels:
+        app: mcp-bridge
+    spec:
+      containers:
+      - name: mcp-bridge
+        image: mcp-bridge:latest
+        stdin: true
+        tty: true
+        ports:
+        - containerPort: 8090
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+        envFrom:
+        - configMapRef:
+            name: model-config
+        env:
+        - name: PG_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: PG_USER
+        - name: PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: PG_PASSWORD
 ---
 # 9. apache Deployment
 apiVersion: apps/v1
@@ -372,6 +515,12 @@ spec:
       - podSelector:
           matchLabels:
             app: apache
+      - podSelector:
+          matchLabels:
+            app: rag-service
+      - podSelector:
+          matchLabels:
+            app: mcp-bridge
       ports:
       - protocol: TCP
         port: 11434

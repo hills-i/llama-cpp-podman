@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>MCP - PostgreSQL Tools (Sample)</title>
+	<link rel="stylesheet" href="css/common.css">
+	<script src="js/model-list.js"></script>
+	<script src="js/ui.js"></script>
+	<style>
+		.hint {
+			font-size: 12px;
+			color: #666;
+			margin-top: 6px;
+		}
+
+		.endpoint-row {
+			display: grid;
+			grid-template-columns: 1fr;
+			gap: 8px;
+		}
+
+		.pill {
+			display: inline-block;
+			padding: 2px 8px;
+			border-radius: 999px;
+			background: var(--border-color);
+			font-size: 12px;
+		}
+
+		.trace-box {
+			border: 1px solid var(--border-color);
+			border-radius: 8px;
+			padding: 12px;
+			background-color: var(--textbox-color);
+			white-space: pre-wrap;
+			overflow-wrap: break-word;
+			font-size: 13px;
+			margin-top: 12px;
+		}
+	</style>
+</head>
+<body>
+	<div class="main-grid">
+		<div class="sidemenu">Side Menu</div>
+		<div class="container">
+			<h1>MCP - PostgreSQL Tools (Sample)</h1>
+
+			<div class="warning-box">
+				This page calls a local HTTP bridge endpoint <span class="pill">/mcp/chat</span> which executes MCP tools server-side.
+				If you haven't enabled the bridge API/proxy, requests will fail.
+			</div>
+
+			<div class="form-group">
+				<label for="model">Model</label>
+				<select id="model">
+					<option>Loading models...</option>
+				</select>
+				<div class="hint">Models are fetched from <span class="pill">/v1/models</span>.</div>
+			</div>
+
+			<div class="form-group">
+				<label for="prompt">Prompt</label>
+				<textarea id="prompt" class="textbox-container" rows="10" placeholder="Ask something that may require database tools...">List available tables, then show 3 rows from wb_table.</textarea>
+				<div class="hint">
+					Tip: mention what you want from PostgreSQL; the bridge will run read-only tools (SELECT only).
+				</div>
+				<button id="submitBtn">Submit</button>
+			</div>
+
+			<div class="response-container">
+				<div class="response-header">
+					<div class="response-title">Answer</div>
+					<div class="btn-group">
+						<button id="copyBtn" class="btn-small hidden">Copy</button>
+						<button id="clearBtn" class="btn-small">Clear</button>
+					</div>
+				</div>
+				<div id="loading" class="loading hidden">
+					<div class="spinner"></div>
+				</div>
+				<div id="response" class="response-box"></div>
+				<div id="toolTrace" class="trace-box hidden"></div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		// Side menu (shared)
+		loadSideMenu();
+
+		document.addEventListener('DOMContentLoaded', () => {
+			const modelSelect = document.getElementById('model');
+			const promptInput = document.getElementById('prompt');
+			const submitBtn = document.getElementById('submitBtn');
+			const responseDiv = document.getElementById('response');
+			const toolTraceDiv = document.getElementById('toolTrace');
+			const loadingDiv = document.getElementById('loading');
+			const copyBtn = document.getElementById('copyBtn');
+			const clearBtn = document.getElementById('clearBtn');
+
+			// Reuse shared copy/clear + Ctrl+Enter + think toggle.
+			setupCommonUI({ submitBtn, responseDiv, loadingDiv, copyBtn, clearBtn, promptInput });
+
+			async function submit() {
+				const model = (modelSelect && modelSelect.value) ? modelSelect.value : '';
+				const message = promptInput.value.trim();
+
+				if (!message) {
+					alert('Please enter your prompt.');
+					return;
+				}
+
+				loadingDiv.classList.remove('hidden');
+				responseDiv.innerHTML = '';
+				responseDiv.classList.remove('error-text');
+				toolTraceDiv.textContent = '';
+				toolTraceDiv.classList.add('hidden');
+				copyBtn.classList.add('hidden');
+				submitBtn.disabled = true;
+
+				try {
+					const requestBody = {
+						model: model,
+						message: message,
+						max_tokens: 2000,
+						stream: false
+					};
+
+					const resp = await fetch('/mcp/chat', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(requestBody)
+					});
+
+					const data = await resp.json().catch(() => ({}));
+					if (!resp.ok) {
+						throw new Error(data?.detail || data?.error || 'MCP bridge API error');
+					}
+
+					const rawText = data?.answer ?? '';
+					const escaped = escapeHtml(rawText);
+					responseDiv.innerHTML = formatSafeResponseHtml(escaped);
+					copyBtn.classList.remove('hidden');
+
+					if (Array.isArray(data?.tool_trace) && data.tool_trace.length > 0) {
+						toolTraceDiv.classList.remove('hidden');
+						toolTraceDiv.textContent = JSON.stringify(data.tool_trace, null, 2);
+					}
+				} catch (e) {
+					responseDiv.textContent = `Error: ${e.message}`;
+					responseDiv.classList.add('error-text');
+				} finally {
+					loadingDiv.classList.add('hidden');
+					submitBtn.disabled = false;
+				}
+			}
+
+			submitBtn.addEventListener('click', submit);
+		});
+	</script>
+</body>
+</html>

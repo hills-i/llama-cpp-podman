@@ -1,0 +1,4 @@
+# Convenience shim.
+# The actual host-side MCP bridge dependencies live in mcp-script/requirements.txt
+
+-r mcp-script/requirements.txt

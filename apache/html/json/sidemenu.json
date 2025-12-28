@@ -1,5 +1,9 @@
 [
     {
+        "href": "translate.html",
+        "label": "Translation (JA ⇔ EN)"
+    },
+    {
         "href": "proofread.html",
         "label": "English Email Checker"
     },
@@ -16,7 +20,7 @@
         "label": "RAG Chat - Continuous Conversation"
     },
     {
-        "href": "translate.html",
-        "label": "Translation (JA ⇔ EN)"
+        "href": "mcp.html",
+        "label": "MCP - PostgreSQL Tools (Sample)"
     }
 ]

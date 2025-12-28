@@ -38,8 +38,9 @@ SECURITY_CHECKLIST.md
 SECURITY_FIXES_SUMMARY.md
 SYSTEM_STATE.md
 rag-service/README-RAG.md
+mcp-script/README-MCP.md
 
 init.sh
 init.template.sh
-
-
+init.sql
+postgres_password.txt

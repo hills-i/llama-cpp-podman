@@ -1,28 +1,27 @@
 # 🦙 llama.cpp on Podman
 
-A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Features Apache HTTPD reverse proxy, ChromaDB vector store, and comprehensive security controls.
+A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Includes Apache HTTPD reverse proxy, ChromaDB vector store, and an optional **MCP bridge** for safe, read-only PostgreSQL tools.
 
 ## ✨ Features
 
 - 🦙 **LLM Inference** with llama.cpp and GGUF models
 - 🧠 **RAG System** with semantic search and document Q&A
-- 🔒 **Security** with HTTPS, authentication, and network isolation
+-  **Security** with HTTPS, authentication, and network isolation
 - 🐳 **Containers** with Kubernetes support
 - 📁 **Multi-Format Support** for PDF, DOCX, TXT, and JSON documents
+- 🧩 **MCP Bridge (optional)**: local-only, read-only PostgreSQL tools for the model
 
 ## 🚀 Quick Start
-
-### Prerequisites
-
-- **Podman** 4.0+ or Docker
-- **8GB+ RAM** (for models + embeddings)
-- **Linux/macOS/Windows with WSL2**
 
 ### 1. Setup
 
 ```bash
 # Create required directories
-mkdir -p apache/certs models rag-service/documents rag-service/data/chroma_db rag-service/models
+mkdir -p \
+    apache/certs \
+    models \
+    rag-service/documents rag-service/data/chroma_db rag-service/models \
+    mcp-script/postgresql-data
 
 # Set SELinux context (if SELinux is enabled on RHEL/Fedora/CentOS)
 # chcon -Rt container_file_t ./rag-service/data/
@@ -48,6 +47,10 @@ wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gg
 #   rag-service/models/embedding/$(EMBEDDING_MODEL_NAME).gguf
 #   rag-service/models/reranker/$(RERANK_MODEL_NAME).gguf
 # Names are configured in kube.yaml (model-config ConfigMap).
+
+# Build local images used by kube.yaml
+podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
+podman build -t mcp-bridge:latest -f mcp-script/Dockerfile mcp-script
 ```
 
 ### 2. Start Services
@@ -78,6 +81,8 @@ graph TB
     D -->|Reranking| G[llama.cpp rerank-service]
     D -->|Vector Store| H[ChromaDB]
     D -->|LLM Calls| C
+    J[MCP Bridge (optional)] -->|OpenAI-compatible chat| C
+    J -->|Read-only SQL tools| I[PostgreSQL (optional)]
     
     subgraph "Container Network"
         B
@@ -87,6 +92,8 @@ graph TB
         F
         G
         H
+        I
+        J
     end
 ```
 
@@ -128,6 +135,12 @@ llama-cpp/
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── README-RAG.md         # RAG-specific documentation
+├── 🧩 MCP Bridge (optional)
+│   ├── bridge.py             # CLI bridge (llama.cpp ↔ MCP)
+│   ├── web_bridge.py         # FastAPI bridge (HTTP)
+│   ├── pg_server.py          # MCP server exposing read-only PG tools
+│   ├── postgresql/init.sql   # Example schema/data loaded on first init
+│   └── postgresql-data/      # Postgres persistent data (hostPath)
 └── 📚 Documentation
     ├── README.md             # This file
     └── LICENSE
@@ -138,13 +151,6 @@ llama-cpp/
 ### Starting and Stopping Services
 
 ```bash
-# Start services
-podman play kube kube.yaml
-
-# Start with network isolation (recommended for production)
-podman network create --internal isolated
-podman play kube --network isolated kube.yaml
-
 # Stop services
 podman play kube --down kube.yaml
 
@@ -164,45 +170,73 @@ podman logs -f llama-cpp-server-deployment-pod-llama-cpp-server
 podman logs -f rag-service-deployment-pod-rag-service
 podman logs -f apache-deployment-pod-apache
 
+# Optional components
+podman logs -f postgresql-deployment-pod-postgresql
+podman logs -f mcp-bridge-deployment-pod-mcp-bridge
+
 # Health checks
 curl -k -u user:pass https://localhost:8443/health
 curl -k -u user:pass https://localhost:8443/rag/status
 ```
 
-### Data Management
+## 🧩 MCP Bridge (PostgreSQL tools)
+
+This repo includes an optional **local-only MCP bridge** that lets the model call **read-only** PostgreSQL tools (SELECT-only) to fetch facts from a database.
+
+- Tools exposed: `list_tables`, `query_database` (read-only)
+
+### kube.yaml integration
+
+[kube.yaml](kube.yaml) defines optional `postgresql` and `mcp-bridge` Deployments.
+
+- PostgreSQL initialization:
+    - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
+    - It runs **only on first init** (when the data directory is empty).
+    - To re-apply, delete the hostPath directory [mcp-script/postgresql-data/](mcp-script/postgresql-data/) and restart.
+
+### Quick sanity check (inside the container)
+
+The `mcp-bridge` container runs a small FastAPI app on port `8090`.
 
 ```bash
-# Backup vector database
-tar -czf rag-backup-$(date +%Y%m%d).tar.gz rag-service/data/
+# Health
+podman exec -it mcp-bridge-deployment-pod-mcp-bridge \
+    curl -s http://localhost:8090/mcp/health | cat
 
-# Clear and rebuild vector store
-rm -rf rag-service/data/chroma_db/
-
-# View document stats
-curl -k -u user:pass https://localhost:8443/rag/status | jq '.vector_store.document_count'
+# Chat (the bridge will call MCP tools as needed)
+podman exec -it mcp-bridge-deployment-pod-mcp-bridge \
+    curl -s -X POST http://localhost:8090/mcp/chat \
+    -H 'content-type: application/json' \
+    -d '{"message":"list tables"}' | cat
 ```
 
 ## ⚙️ Configuration
 
 ### Model Configuration
 
-Update kube.yaml with your model path:
+Update kube.yaml with your model settings in the `model-config` ConfigMap:
 
 ```yaml
-env:
-- name: MODEL_DIRECTORY
-  value: /models
-args:
-- --models-dir
-- /models
+kind: ConfigMap
+metadata:
+    name: model-config
+data:
+    MODEL_DIRECTORY: /models
 ```
 
-The RAG service uses these key environment variables (see kube.yaml):
+The RAG service uses these key environment variables (see kube.yaml `model-config` ConfigMap):
 - `LLAMA_CPP_BASE_URL` (default: `http://llama-cpp-server:11434`)
 - `LLAMA_CPP_MODEL_NAME` (model id from llama.cpp `/v1/models`)
 - `EMBEDDING_API_BASE` / `EMBEDDING_MODEL_NAME`
 - `RERANK_API_BASE` / `RERANK_MODEL_NAME`
 - `RETRIEVAL_CANDIDATES` / `RERANK_TOP_K`
+
+The MCP bridge uses these key environment variables (see kube.yaml `model-config` ConfigMap; for host runs, see [mcp-script/.env.template](mcp-script/.env.template)):
+
+- `LLM_BASE_URL` (example in-cluster: `http://llama-cpp-server:11434/v1`)
+- `LLM_MODEL` (model id from `GET /v1/models`)
+- `OPENAI_API_KEY` (use `local` for llama.cpp)
+- `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD` (or use `PG_DSN` when running on the host)
 
 ## 🧠 RAG System Deep Dive
 
@@ -316,22 +350,14 @@ chmod 600 apache/certs/server.key
 
 **2. Authentication:**
 ```bash
-# Change default password
+# Generate password hash (change username/password as needed)
 python3 -c "
 import crypt
-password = input('Enter secure password: ')
-encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-print(f'user:{encrypted}')
-" > apache/.htpasswd
-
-# Add additional users
-python3 -c "
-import crypt
-username = 'newuser'
-password = 'securepass'
+username = 'user'
+password = 'pass'
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 print(f'{username}:{encrypted}')
-" >> apache/.htpasswd
+" > apache/.htpasswd  # Use >> to append additional users
 ```
 
 **3. CORS Configuration (rag-service/src/main.py):**
@@ -346,11 +372,7 @@ app.add_middleware(
 ```
 
 **4. Network Isolation:**
-```bash
-# Create isolated network (no internet access)
-podman network create --internal isolated
-podman play kube --network isolated kube.yaml
-```
+Use `podman play kube --network isolated kube.yaml` (see Quick Start).
 
 **5. Firewall Rules:**
 ```bash
@@ -460,20 +482,33 @@ podman play kube kube.yaml
 </details>
 
 <details>
+<summary>🧩 MCP / PostgreSQL Issues</summary>
+
+```bash
+# Check Postgres boot + init.sql ran (only on first init)
+podman logs postgresql-deployment-pod-postgresql | tail -n 200
+
+# If you need to re-apply init.sql, delete persistent data and restart
+rm -rf mcp-script/postgresql-data
+mkdir -p mcp-script/postgresql-data
+podman play kube --down kube.yaml
+podman play kube kube.yaml
+
+# Check the bridge can reach llama.cpp and Postgres
+podman exec -it mcp-bridge-deployment-pod-mcp-bridge curl -s http://localhost:8090/mcp/health | cat
+podman logs mcp-bridge-deployment-pod-mcp-bridge | tail -n 200
+```
+
+</details>
+
+<details>
 <summary>🔐 Authentication Issues</summary>
 
 ```bash
-# Verify password file
+# Verify password file exists and has content
 cat apache/.htpasswd
 
-# Recreate with new password
-python3 -c "
-import crypt
-password = 'pass'
-encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-print(f'user:{encrypted}')
-" > apache/.htpasswd
-
+# Regenerate credentials (see Security Configuration section above)
 # Test authentication
 curl -k -u user:pass https://localhost:8443/health
 ```
