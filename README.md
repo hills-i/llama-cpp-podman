@@ -81,8 +81,8 @@ graph TB
     D -->|Reranking| G[llama.cpp rerank-service]
     D -->|Vector Store| H[ChromaDB]
     D -->|LLM Calls| C
-    J[MCP Bridge (optional)] -->|OpenAI-compatible chat| C
-    J -->|Read-only SQL tools| I[PostgreSQL (optional)]
+    J[MCP Bridge] -->|OpenAI-compatible chat| C
+    J -->|Read-only SQL tools| I[PostgreSQL]
     
     subgraph "Container Network"
         B
