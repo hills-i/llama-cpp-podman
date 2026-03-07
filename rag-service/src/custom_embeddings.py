@@ -7,6 +7,8 @@ from typing import List, Optional
 import requests
 from langchain_core.embeddings import Embeddings
 
+from .http_session import create_http_session
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,16 +36,9 @@ class LlamaCppEmbeddingClient(Embeddings):
       extra={"base_url": self.api_base, "model": self.model},
     )
 
-  def _create_session(self) -> requests.Session:
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
-
-    session = requests.Session()
-    retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+  @staticmethod
+  def _create_session() -> requests.Session:
+    return create_http_session()
 
   def _embed(self, texts: List[str]) -> List[List[float]]:
     if not texts:

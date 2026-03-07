@@ -9,6 +9,8 @@ from langchain_core.documents import Document
 from langchain_core.documents import BaseDocumentCompressor
 from pydantic import ConfigDict, PrivateAttr
 
+from .http_session import create_http_session
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RERANK_API_BASE = "http://rerank-service:8080/v1"
@@ -56,16 +58,9 @@ class LlamaCppReranker(BaseDocumentCompressor):
             extra={"base_url": self.api_base, "model": self.model_name, "top_n": self.top_n},
         )
 
-    def _create_session(self) -> requests.Session:
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-
-        session = requests.Session()
-        retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=retry)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        return session
+    @staticmethod
+    def _create_session() -> requests.Session:
+        return create_http_session()
 
     def _post_rerank(self, query: str, documents: List[Document]) -> List[Dict[str, Any]]:
         payload = {

@@ -17,8 +17,6 @@ data:
   # Podman play kube resolves the pod/deployment name (e.g. 'llama-cpp-server'),
   # but not the Kubernetes Service name 'llama-cpp-server-service'.
   LLAMA_CPP_BASE_URL: "http://llama-cpp-server:11434"
-  # Use the model id returned by llama.cpp /v1/models (not the .gguf filename).
-  LLAMA_CPP_MODEL_NAME: "Qwen3-0.6B-Q8_0"
   EMBEDDING_API_BASE: "http://embedding-service:8080/v1"
   RERANK_API_BASE: "http://rerank-service:8080/v1"
   RETRIEVAL_CANDIDATES: "50"
@@ -31,7 +29,7 @@ data:
   OPENAI_API_KEY: "local"
   PG_HOST: "postgresql"
   PG_PORT: "5432"
-  PG_DATABASE: "test"
+  PG_DATABASE: "app_db"
   # File Upload Security Limits
   MAX_FILE_SIZE_MB: "10"
   MAX_UPLOAD_SIZE_MB: "50"
@@ -53,8 +51,8 @@ stringData:
   # PostgreSQL superuser password (used by postgres container)
   POSTGRES_PASSWORD: "postgres"
   # Application user credentials (created by init.sql)
-  PG_USER: "appuser"
-  PG_PASSWORD: "apppassword"
+  PG_USER: "app_user"
+  PG_PASSWORD: "app_password"
 ---
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
@@ -87,15 +85,20 @@ spec:
         - --host
         - 0.0.0.0
         - -n
-        - "4096"
+        - "16384"
         - -c
-        - "8192"
+        - "16384"
         - -np
-        - "4"
+        - "1"
         - -sps
         - "0.5"
         - --cache-reuse
         - "128"
+        - -fa
+        - 'auto'
+        - --chat-template-kwargs
+        - "{\"enable_thinking\": false}"
+
        # --- CORRECTED LIVENESS PROBE ---
         livenessProbe:
           exec:
@@ -108,6 +111,13 @@ spec:
           periodSeconds: 15
           timeoutSeconds: 5
           failureThreshold: 3
+        resources:
+          limits:
+            memory: "20Gi"
+            cpu: "16000m"
+          requests:
+            memory: "8Gi"
+            cpu: "2000m"
         volumeMounts:
         - mountPath: /models
           name: llama-cpp-server-data
@@ -155,17 +165,13 @@ spec:
             name: model-config
         ports:
         - containerPort: 8080
-#        resources:
-#          limits:
-#            memory: "4Gi"
-#            cpu: "2000m"
-#          requests:
-#            memory: "2Gi"
-#            cpu: "1000m"
-#        securityContext:
-#          runAsNonRoot: true
-#          runAsUser: 1000
-#          allowPrivilegeEscalation: false
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
         volumeMounts:
         - name: rag-documents
           mountPath: /app/documents
@@ -234,6 +240,13 @@ spec:
         - 0.0.0.0
         ports:
         - containerPort: 8080
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
         volumeMounts:
         - mountPath: /models
           name: shared-models
@@ -291,6 +304,13 @@ spec:
         - 0.0.0.0
         ports:
         - containerPort: 8080
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
         volumeMounts:
         - mountPath: /models
           name: shared-models
@@ -434,7 +454,48 @@ spec:
               name: postgresql-credentials
               key: PG_PASSWORD
 ---
-# 9. apache Deployment
+# 9. opencode-service Deployment (interactive; exec into pod for TTY)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode-service-deployment
+  labels:
+    app: opencode-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode-service
+  template:
+    metadata:
+      labels:
+        app: opencode-service
+    spec:
+      containers:
+      - name: opencode-service
+        image: opencode-service:latest
+        stdin: true
+        tty: true
+        envFrom:
+        - configMapRef:
+            name: model-config
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: dev-dir
+          mountPath: /workspace
+      volumes:
+      - name: dev-dir
+        hostPath:
+          path: ./dev-dir
+          type: DirectoryOrCreate
+---
+# 10. apache Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -464,6 +525,13 @@ spec:
           hostPort: 8080
         - containerPort: 443
           hostPort: 8443
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
         volumeMounts:
         - name: apache-conf
           mountPath: /usr/local/apache2/conf
@@ -521,6 +589,9 @@ spec:
       - podSelector:
           matchLabels:
             app: mcp-bridge
+      - podSelector:
+          matchLabels:
+            app: opencode-service
       ports:
       - protocol: TCP
         port: 11434
@@ -627,3 +698,35 @@ spec:
       ports:
       - protocol: TCP
         port: 8080
+
+---
+# 14. NetworkPolicy: opencode-service egress only to llama-cpp-server + DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opencode-service-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: opencode-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # DNS
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    # llama-cpp-server
+    - to:
+      - podSelector:
+          matchLabels:
+            app: llama-cpp-server
+      ports:
+      - protocol: TCP
+        port: 11434

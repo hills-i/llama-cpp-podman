@@ -29,13 +29,18 @@ class DocumentProcessor:
             length_function=len,
         )
     
+    def _json_metadata(self, file_path: str, file_name: str, **extra) -> dict:
+        """Build base metadata dict for JSON documents."""
+        meta = {"source": file_path, "file_type": "json", "file_name": file_name}
+        meta.update(extra)
+        return meta
+
     def load_json_document(self, file_path: str) -> List[Document]:
         """Load and process JSON documents."""
         documents = []
         MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
         try:
-            # Check file size before loading
             file_size = os.path.getsize(file_path)
             if file_size > MAX_FILE_SIZE:
                 logger.warning("JSON file too large; skipping", extra={"path": file_path, "size": file_size})
@@ -43,110 +48,65 @@ class DocumentProcessor:
 
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             file_name = Path(file_path).name
-            
-            # Handle different JSON structures
+
             if isinstance(data, dict):
-                # If it's a dictionary, try different strategies
                 if 'content' in data:
-                    # Structure: {"title": "...", "content": "...", "metadata": {...}}
-                    content = data['content']
-                    metadata = {
-                        "source": file_path,
-                        "file_type": "json",
-                        "file_name": file_name,
-                    }
-                    
-                    # Add any additional metadata from the JSON
+                    metadata = self._json_metadata(file_path, file_name)
                     if 'metadata' in data:
                         metadata.update(data['metadata'])
-                    
-                    # Add other top-level fields as metadata
                     for key, value in data.items():
-                        if key not in ['content', 'metadata'] and isinstance(value, (str, int, float, bool)):
+                        if key not in ('content', 'metadata') and isinstance(value, (str, int, float, bool)):
                             metadata[key] = value
-                    
-                    documents.append(Document(page_content=content, metadata=metadata))
-                
+                    documents.append(Document(page_content=data['content'], metadata=metadata))
+
                 elif 'chunks' in data and isinstance(data['chunks'], list):
-                    # Structure: {"chunks": ["chunk1", "chunk2", ...]}
                     for i, chunk in enumerate(data['chunks']):
                         if isinstance(chunk, str):
-                            metadata = {
-                                "source": file_path,
-                                "file_type": "json",
-                                "file_name": file_name,
-                                "chunk_index": i,
-                            }
-                            documents.append(Document(page_content=chunk, metadata=metadata))
-                
+                            documents.append(Document(
+                                page_content=chunk,
+                                metadata=self._json_metadata(file_path, file_name, chunk_index=i),
+                            ))
+
                 else:
-                    # Fallback: convert entire JSON to text
-                    content = json.dumps(data, ensure_ascii=False, indent=2)
-                    metadata = {
-                        "source": file_path,
-                        "file_type": "json",
-                        "file_name": file_name,
-                        "json_structure": "object"
-                    }
-                    documents.append(Document(page_content=content, metadata=metadata))
-            
+                    documents.append(Document(
+                        page_content=json.dumps(data, ensure_ascii=False, indent=2),
+                        metadata=self._json_metadata(file_path, file_name, json_structure="object"),
+                    ))
+
             elif isinstance(data, list):
-                # If it's a list, process each item
                 for i, item in enumerate(data):
                     if isinstance(item, dict) and 'content' in item:
-                        content = item['content']
-                        metadata = {
-                            "source": file_path,
-                            "file_type": "json",
-                            "file_name": file_name,
-                            "item_index": i,
-                        }
-                        
-                        # Add other fields as metadata
+                        metadata = self._json_metadata(file_path, file_name, item_index=i)
                         for key, value in item.items():
                             if key != 'content' and isinstance(value, (str, int, float, bool)):
                                 metadata[key] = value
-                        
-                        documents.append(Document(page_content=content, metadata=metadata))
-                    
+                        documents.append(Document(page_content=item['content'], metadata=metadata))
+
                     elif isinstance(item, str):
-                        # List of strings
-                        metadata = {
-                            "source": file_path,
-                            "file_type": "json",
-                            "file_name": file_name,
-                            "item_index": i,
-                        }
-                        documents.append(Document(page_content=item, metadata=metadata))
-                    
+                        documents.append(Document(
+                            page_content=item,
+                            metadata=self._json_metadata(file_path, file_name, item_index=i),
+                        ))
+
                     else:
-                        # Fallback: convert item to JSON string
-                        content = json.dumps(item, ensure_ascii=False, indent=2)
-                        metadata = {
-                            "source": file_path,
-                            "file_type": "json",
-                            "file_name": file_name,
-                            "item_index": i,
-                        }
-                        documents.append(Document(page_content=content, metadata=metadata))
-            
+                        documents.append(Document(
+                            page_content=json.dumps(item, ensure_ascii=False, indent=2),
+                            metadata=self._json_metadata(file_path, file_name, item_index=i),
+                        ))
+
             else:
-                # Fallback for other data types
-                content = json.dumps(data, ensure_ascii=False, indent=2)
-                metadata = {
-                    "source": file_path,
-                    "file_type": "json",
-                    "file_name": file_name,
-                }
-                documents.append(Document(page_content=content, metadata=metadata))
-        
+                documents.append(Document(
+                    page_content=json.dumps(data, ensure_ascii=False, indent=2),
+                    metadata=self._json_metadata(file_path, file_name),
+                ))
+
         except json.JSONDecodeError as e:
             logger.warning("Invalid JSON; skipping", extra={"path": file_path, "error": str(e)})
         except Exception as e:
             logger.exception("Error loading JSON", extra={"path": file_path})
-        
+
         return documents
         
     def load_documents(self, directory: str) -> List[Document]:

@@ -1,3 +1,4 @@
+certs/
 apache/certs/
 .htpasswd
 apache/logs/*
@@ -5,7 +6,7 @@ models/*
 .venv
 backups/*
 scripts/*
-
+tests/
 rag-service/data/chroma_db*
 rag-service/documents/*
 rag-service/models/*
@@ -33,6 +34,7 @@ Thumbs.db
 
 AGENTS.md
 CODE_REVIEW.md
+.claude/
 CLAUDE.md
 SECURITY_CHECKLIST.md
 SECURITY_FIXES_SUMMARY.md
@@ -44,3 +46,6 @@ init.sh
 init.template.sh
 init.sql
 postgres_password.txt
+
+play-kube.sh
+stop-kube.sh

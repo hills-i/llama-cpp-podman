@@ -3,6 +3,7 @@
 import os
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import uvicorn
@@ -56,7 +57,7 @@ def validate_path(path: str) -> str:
             # Different drives / invalid paths on some platforms
             continue
 
-    logger.warning(f"Path traversal blocked: {path}")
+    logger.warning("Path traversal blocked: %s", repr(path))
     raise HTTPException(
         status_code=403,
         detail="Access denied: path outside allowed directories"
@@ -104,11 +105,39 @@ class StatusResponse(BaseModel):
     chain_ready: bool
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize RAG components on startup."""
+    global vector_store_manager, rag_chain
+
+    logger.info("Initializing RAG service...")
+
+    vector_store_manager = VectorStoreManager()
+
+    rag_chain = RAGChain(
+        vector_store_manager,
+        use_reranker=True,
+        llama_base_url=os.getenv("LLAMA_CPP_BASE_URL"),
+    )
+
+    # Load sample documents if no documents exist
+    collection_info = vector_store_manager.get_collection_info()
+    if collection_info["document_count"] == 0:
+        logger.info("No documents found, loading sample documents...")
+        sample_docs = load_sample_documents()
+        vector_store_manager.add_documents(sample_docs)
+        logger.info("Sample documents loaded")
+
+    logger.info("RAG service initialization complete")
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="RAG Service",
     description="Retrieval-Augmented Generation service using LangChain and llama.cpp",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS:
@@ -126,8 +155,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allow_origins,
     allow_credentials=cors_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 # Global error handler - sanitize errors for security
@@ -153,33 +182,6 @@ vector_store_manager = None
 rag_chain = None
 document_processor = DocumentProcessor()
 
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize RAG components on startup."""
-    global vector_store_manager, rag_chain
-
-    logger.info("Initializing RAG service...")
-
-    # Initialize vector store
-    vector_store_manager = VectorStoreManager()
-
-    # Initialize RAG chain with reranker enabled
-    rag_chain = RAGChain(
-        vector_store_manager,
-        use_reranker=True,
-        llama_base_url=os.getenv("LLAMA_CPP_BASE_URL"),
-    )
-
-    # Load sample documents if no documents exist
-    collection_info = vector_store_manager.get_collection_info()
-    if collection_info["document_count"] == 0:
-        logger.info("No documents found, loading sample documents...")
-        sample_docs = load_sample_documents()
-        vector_store_manager.add_documents(sample_docs)
-        logger.info("Sample documents loaded")
-
-    logger.info("RAG service initialization complete")
 
 
 @app.get("/", response_model=Dict[str, str])
@@ -277,6 +279,9 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             if os.path.commonpath([str(resolved_target), str(upload_dir.resolve())]) != str(upload_dir.resolve()):
                 raise HTTPException(status_code=400, detail="Invalid upload path")
 
+            # Register for cleanup before writing so partial files are always removed.
+            uploaded_files.append(str(file_path))
+
             # Stream file to disk while enforcing per-file and total size limits.
             bytes_written = 0
             with open(file_path, "wb") as buffer:
@@ -301,7 +306,6 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 
                     buffer.write(chunk)
 
-            uploaded_files.append(str(file_path))
             logger.info(f"Uploaded: {safe_name} ({bytes_written} bytes)")
         
         # Process documents
@@ -349,15 +353,13 @@ async def ingest_directory(directory_path: str = Form(...)):
     if documents:
         vector_store_manager.add_documents(documents)
         return {
-            "message": f"Successfully ingested documents from {directory_path}",
+            "message": "Successfully ingested documents",
             "documents_added": len(documents),
-            "directory": directory_path,
         }
 
     return {
-        "message": f"No processable documents found in {directory_path}",
+        "message": "No processable documents found",
         "documents_added": 0,
-        "directory": directory_path,
     }
 
 

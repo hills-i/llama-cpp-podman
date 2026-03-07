@@ -167,6 +167,33 @@ def _mcp_result_to_text(result: Any) -> str:
     return "\n".join(parts)
 
 
+def _parse_tool_payload(tool_text: str) -> dict[str, Any] | None:
+    """Best-effort parse of JSON tool responses produced by the MCP server."""
+    try:
+        payload = json.loads(tool_text)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _tool_error_from_text(tool_text: str) -> str | None:
+    """Extract a tool-level error from a JSON payload, if present."""
+    payload = _parse_tool_payload(tool_text)
+    if not payload:
+        return None
+
+    error = payload.get("error")
+    if not error:
+        return None
+
+    detail = payload.get("detail")
+    if detail:
+        return f"{error}: {detail}"
+    return str(error)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     model: str | None = None
@@ -184,7 +211,7 @@ class ToolTraceItem(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    tool_trace: list[ToolTraceItem] = []
+    tool_trace: list[ToolTraceItem] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -405,7 +432,16 @@ async def _chat_with_trace(
                 async with session_lock:
                     result = await session.call_tool(name, args)
                 tool_text = _mcp_result_to_text(result)
-                trace.append(ToolTraceItem(name=name, args=args, ok=True, result=tool_text))
+                tool_error = _tool_error_from_text(tool_text)
+                trace.append(
+                    ToolTraceItem(
+                        name=name,
+                        args=args,
+                        ok=tool_error is None,
+                        result=tool_text,
+                        error=tool_error,
+                    )
+                )
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 tool_text = json.dumps({"error": "Tool call failed", "tool": name, "detail": err})

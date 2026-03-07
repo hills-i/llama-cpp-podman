@@ -2,17 +2,15 @@
 
 import os
 import uuid
+from collections import deque
 from typing import List, Dict, Any, Optional
 import requests
 import time
 import logging
 from threading import Lock
 from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
-from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-from langchain_core.language_models.llms import LLM
-from langchain_core.callbacks.manager import CallbackManagerForLLMRun
-from pydantic import ConfigDict
+from langchain_openai import ChatOpenAI
 
 from .vector_store import VectorStoreManager
 from .reranker import LlamaCppReranker
@@ -21,130 +19,51 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Simple rate limiter to prevent DoS attacks."""
+    """Simple sliding-window rate limiter."""
 
     def __init__(self, max_requests: int = 10, time_window: int = 60):
-        """
-        Initialize rate limiter.
-
-        Args:
-            max_requests: Maximum requests allowed in time window
-            time_window: Time window in seconds
-        """
         self.max_requests = max_requests
         self.time_window = time_window
-        self.requests = []
-        self.lock = Lock()
+        self._requests: deque = deque()
+        self._lock = Lock()
 
     def allow_request(self) -> bool:
         """Check if request is allowed under rate limit."""
-        with self.lock:
+        with self._lock:
             now = time.time()
-            # Remove old requests outside time window
-            self.requests = [req for req in self.requests if now - req < self.time_window]
+            cutoff = now - self.time_window
+            while self._requests and self._requests[0] < cutoff:
+                self._requests.popleft()
 
-            if len(self.requests) < self.max_requests:
-                self.requests.append(now)
+            if len(self._requests) < self.max_requests:
+                self._requests.append(now)
                 return True
             return False
 
     def get_retry_after(self) -> int:
         """Get seconds until rate limit resets."""
-        with self.lock:
-            if not self.requests:
+        with self._lock:
+            if not self._requests:
                 return 0
-            oldest_request = min(self.requests)
-            return max(0, int(self.time_window - (time.time() - oldest_request)))
+            return max(0, int(self.time_window - (time.time() - self._requests[0])))
 
 
-class LlamaCppLLM(LLM):
-    """Custom LLM wrapper for llama.cpp server with connection pooling."""
-
-    base_url: str = os.getenv("LLAMA_CPP_BASE_URL", "http://llama-cpp-server:11434")
-    model_name: Optional[str] = os.getenv("LLAMA_CPP_MODEL_NAME")
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def __init__(self, base_url: str = None, model_name: Optional[str] = None, **kwargs):
-        base_url = base_url or os.getenv("LLAMA_CPP_BASE_URL", "http://llama-cpp-server:11434")
-        model_name = model_name or os.getenv("LLAMA_CPP_MODEL_NAME")
-        super().__init__(base_url=base_url, model_name=model_name, **kwargs)
-        # Use object.__setattr__ to bypass Pydantic validation
-        object.__setattr__(self, '_session', self._create_session())
-
-    def _create_session(self) -> requests.Session:
-        """Create session with connection pooling and retry logic."""
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504]
-        )
-        adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=20,
-            max_retries=retry_strategy
-        )
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        return session
-
-    @property
-    def _llm_type(self) -> str:
-        return "llama-cpp"
-
-    def _call(
-        self,
-        prompt: str,
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> str:
-        """Call the llama.cpp server for completion."""
-        try:
-            # Add proper stop tokens for cleaner responses
-            default_stop = ["Answer:", "答案：", "\n\n", "<|im_end|>", "<|endoftext|>"]
-            if stop:
-                default_stop.extend(stop)
-
-            payload = {
-                "model": self.model_name,
-                "prompt": prompt,
-                "n_predict": kwargs.get("max_tokens", 256),
-                "temperature": kwargs.get("temperature", 0.3),
-                "top_p": kwargs.get("top_p", 0.8),
-                "stop": default_stop,
-                "stream": False,
-                "repeat_penalty": 1.1,
-                "top_k": 40
-            }
-
-            # Some llama.cpp server configs require explicit model selection.
-            # If not provided, omit it (older servers may not accept the field).
-            if not payload.get("model"):
-                payload.pop("model", None)
-
-            completion_endpoint = f"{self.base_url}/completion"
-            # Use the session stored via object.__setattr__
-            response = self._session.post(
-                completion_endpoint,
-                json=payload,
-                timeout=180
-            )
-            response.raise_for_status()
-
-            result = response.json()
-            return result.get("content", "").strip()
-
-        except requests.exceptions.RequestException as e:
-            logger.error("Error calling llama.cpp server", exc_info=True)
-            return "Error: Unable to generate response."
-        except Exception as e:
-            logger.error("Unexpected error calling llama.cpp server", exc_info=True)
-            return "Error: Unable to generate response."
+def create_llm(base_url: str) -> ChatOpenAI:
+    """Create a ChatOpenAI instance configured for llama.cpp server."""
+    return ChatOpenAI(
+        base_url=f"{base_url}/v1",
+        api_key="not-needed",
+        model=os.getenv("LLM_MODEL", "default"),
+        temperature=0.3,
+        top_p=0.8,
+        max_tokens=1024,
+        stop=[],
+        extra_body={
+            "repeat_penalty": 1.1,
+            "top_k": 40,
+        },
+        timeout=180,
+    )
 
 
 class RAGChain:
@@ -160,7 +79,8 @@ class RAGChain:
         rate_limit_window: int = 60,
     ):
         self.vector_store_manager = vector_store_manager
-        self.llm = LlamaCppLLM(base_url=llama_base_url)
+        self.llama_base_url = llama_base_url or os.getenv("LLAMA_CPP_BASE_URL", "http://llama-cpp-server:11434")
+        self.llm = create_llm(self.llama_base_url)
         self.use_reranker = use_reranker
 
         # Retrieval sizing
@@ -209,14 +129,15 @@ class RAGChain:
         # Define the prompt template
         self.prompt_template = PromptTemplate(
             input_variables=["context", "question"],
-            template="""Use the following pieces of context to answer the question at the end. If you don't know the answer based on the context, just say that you don't know, don't try to make up an answer.
+            template="""以下のコンテキスト情報のみを使って質問に回答してください。コンテキストに答えがない場合は「情報が見つかりませんでした」と回答してください。
+回答は直接的に、簡潔に記述してください。思考過程や計画は出力しないでください。
 
-Context:
+コンテキスト:
 {context}
 
-Question: {question}
+質問: {question}
 
-Answer:"""
+回答:"""
         )
 
     def query(self, question: str, include_sources: bool = True) -> Dict[str, Any]:
@@ -227,6 +148,7 @@ Answer:"""
             retry_after = self.rate_limiter.get_retry_after()
             return {
                 "answer": f"Rate limit exceeded. Please try again in {retry_after} seconds.",
+                "question": question if isinstance(question, str) else "",
                 "sources": [],
                 "error": "rate_limited",
                 "retry_after": retry_after
@@ -236,6 +158,7 @@ Answer:"""
         if not question or not isinstance(question, str):
             return {
                 "answer": "Invalid question format. Please provide a text question.",
+                "question": question if isinstance(question, str) else "",
                 "sources": [],
                 "error": "validation_failed"
             }
@@ -247,6 +170,7 @@ Answer:"""
         if len(question) > MAX_QUESTION_LENGTH:
             return {
                 "answer": f"Question too long. Maximum {MAX_QUESTION_LENGTH} characters allowed.",
+                "question": question,
                 "sources": [],
                 "error": "question_too_long"
             }
@@ -254,6 +178,7 @@ Answer:"""
         if len(question) < 3:
             return {
                 "answer": "Question too short. Please provide more details (minimum 3 characters).",
+                "question": question,
                 "sources": [],
                 "error": "question_too_short"
             }
@@ -288,7 +213,8 @@ Answer:"""
             
             # GENERATION STEP
             prompt = self.prompt_template.format(context=context, question=question)
-            answer = self.llm._call(prompt)
+            llm_response = self.llm.invoke(prompt)
+            answer = llm_response.content.strip()
             
             # RESPONSE FORMATTING
             response = {
@@ -355,32 +281,28 @@ Answer:"""
                 return results
 
             logger.debug("Using vector similarity search")
-            try:
-                documents = self.vector_store_manager.similarity_search_with_score(query, k=k)
-                logger.debug(f"Retrieved {len(documents)} documents from vector store")
+            documents = self.vector_store_manager.similarity_search_with_score(query, k=k)
+            logger.debug(f"Retrieved {len(documents)} documents from vector store")
 
-                results = []
-                for i, (doc, score) in enumerate(documents):
-                    if float(score) == 0.0:
-                        similarity_percentage = max(50, 90 - (i * 10))
-                    else:
-                        similarity_percentage = max(0, min(100, (1 - float(score) / 2) * 100))
+            results = []
+            for i, (doc, score) in enumerate(documents):
+                if float(score) == 0.0:
+                    similarity_percentage = max(50, 90 - (i * 10))
+                else:
+                    similarity_percentage = max(0, min(100, (1 - float(score) / 2) * 100))
 
-                    results.append(
-                        {
-                            "content": doc.page_content,
-                            "metadata": doc.metadata,
-                            "similarity_score": similarity_percentage,
-                            "source": doc.metadata.get("source", "Unknown"),
-                            "retrieval_rank": i + 1,
-                            "retrieval_method": "vector_only",
-                        }
-                    )
+                results.append(
+                    {
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "similarity_score": similarity_percentage,
+                        "source": doc.metadata.get("source", "Unknown"),
+                        "retrieval_rank": i + 1,
+                        "retrieval_method": "vector_only",
+                    }
+                )
 
-                return results
-            except Exception as search_error:
-                logger.error(f"Error in similarity search processing: {search_error}")
-                return []
+            return results
 
         except Exception as e:
             logger.error(f"Error during simple retrieval: {e}")
@@ -399,7 +321,7 @@ Answer:"""
         
         # Test LLM availability
         try:
-            test_response = requests.get(f"{self.llm.base_url}/health", timeout=5)
+            test_response = requests.get(f"{self.llama_base_url}/health", timeout=5)
             status["llm_available"] = test_response.status_code == 200
         except requests.exceptions.RequestException:
             status["llm_available"] = False

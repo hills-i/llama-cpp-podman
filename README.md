@@ -51,6 +51,7 @@ wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gg
 # Build local images used by kube.yaml
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
 podman build -t mcp-bridge:latest -f mcp-script/Dockerfile mcp-script
+podman build -t opencode-service:latest -f opencode-service/Dockerfile opencode-service
 ```
 
 ### 2. Start Services
@@ -81,8 +82,8 @@ graph TB
     D -->|Reranking| G[llama.cpp rerank-service]
     D -->|Vector Store| H[ChromaDB]
     D -->|LLM Calls| C
-    J[MCP Bridge] -->|OpenAI-compatible chat| C
-    J -->|Read-only SQL tools| I[PostgreSQL]
+    J[MCP Bridge (optional)] -->|OpenAI-compatible chat| C
+    J -->|Read-only SQL tools| I[PostgreSQL (optional)]
     
     subgraph "Container Network"
         B
@@ -116,6 +117,7 @@ llama-cpp/
 │       ├── translate.html    # JA ⇔ EN translation
 │       ├── proofread.html    # Text proofreading
 │       ├── reply.html        # Email assistant
+│       ├── mcp.html          # MCP bridge chat interface
 │       ├── sidemenu.html     # Navigation menu
 │       ├── css/              # Stylesheets
 │       └── js/               # Client-side functionality
@@ -128,19 +130,23 @@ llama-cpp/
 │   │   ├── vector_store.py   # ChromaDB integration
 │   │   ├── custom_embeddings.py
 │   │   ├── reranker.py
-│   │   └── document_loader.py
+│   │   ├── document_loader.py
+│   │   └── http_session.py   # Shared HTTP session (connection pooling + retries)
 │   ├── documents/            # Input documents (excluded from git)
 │   ├── data/                 # Vector database (excluded from git)
 │   ├── models/               # Embedding and rerank models (excluded from git)
 │   ├── requirements.txt
-│   ├── Dockerfile
-│   └── README-RAG.md         # RAG-specific documentation
+│   └── Dockerfile
 ├── 🧩 MCP Bridge (optional)
 │   ├── bridge.py             # CLI bridge (llama.cpp ↔ MCP)
 │   ├── web_bridge.py         # FastAPI bridge (HTTP)
 │   ├── pg_server.py          # MCP server exposing read-only PG tools
 │   ├── postgresql/init.sql   # Example schema/data loaded on first init
 │   └── postgresql-data/      # Postgres persistent data (hostPath)
+├── 💻 opencode-service (optional)
+│   ├── Dockerfile            # Node.js + OpenCode CLI
+│   └── entrypoint.sh
+├── dev-dir/                  # Workspace mounted into opencode-service at /workspace
 └── 📚 Documentation
     ├── README.md             # This file
     └── LICENSE
@@ -168,6 +174,8 @@ podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 # Service logs
 podman logs -f llama-cpp-server-deployment-pod-llama-cpp-server
 podman logs -f rag-service-deployment-pod-rag-service
+podman logs -f embedding-service-deployment-pod-embedding-service
+podman logs -f rerank-service-deployment-pod-rerank-service
 podman logs -f apache-deployment-pod-apache
 
 # Optional components
@@ -226,7 +234,7 @@ data:
 
 The RAG service uses these key environment variables (see kube.yaml `model-config` ConfigMap):
 - `LLAMA_CPP_BASE_URL` (default: `http://llama-cpp-server:11434`)
-- `LLAMA_CPP_MODEL_NAME` (model id from llama.cpp `/v1/models`)
+- `LLM_MODEL` (model id from llama.cpp `/v1/models`)
 - `EMBEDDING_API_BASE` / `EMBEDDING_MODEL_NAME`
 - `RERANK_API_BASE` / `RERANK_MODEL_NAME`
 - `RETRIEVAL_CANDIDATES` / `RERANK_TOP_K`
@@ -253,13 +261,10 @@ The MCP bridge uses these key environment variables (see kube.yaml `model-config
 
 ### Dependencies
 
-The RAG service uses LangChain 1.1.x with modular packages (see rag-service/requirements.txt):
-- `langchain==1.1.3`
-- `langchain-classic==1.0.0`
-- `langchain-community==0.4.1`
-- `langchain-core==1.1.3`
-
-All imports have been updated to use the new package structure to avoid deprecation warnings.
+The RAG service uses LangChain 1.1.x with modular packages (see [rag-service/requirements.txt](rag-service/requirements.txt)):
+- `langchain`, `langchain-classic`, `langchain-core`, `langchain-community`, `langchain-openai`
+- `chromadb`, `fastapi`, `uvicorn`, `requests`, `openai`
+- `pypdf`, `python-docx` for document parsing
 
 ### API Reference
 
@@ -335,7 +340,7 @@ Response: {"choices": [...]}
 **Default Settings:**
 - Self-signed SSL certificates
 - Basic authentication: `user` / `pass`
-- CORS: Allow all origins
+- CORS: Disabled by default (same-origin; Apache proxies UI and API together)
 - Network: Internet access enabled
 
 ### Production Hardening
@@ -360,16 +365,13 @@ print(f'{username}:{encrypted}')
 " > apache/.htpasswd  # Use >> to append additional users
 ```
 
-**3. CORS Configuration (rag-service/src/main.py):**
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://yourdomain.com"],  # Specific origins only
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
+**3. CORS Configuration:**
+
+Set `CORS_ALLOW_ORIGINS` in the `model-config` ConfigMap in kube.yaml (comma-separated):
+```yaml
+CORS_ALLOW_ORIGINS: "https://yourdomain.com"
 ```
+Wildcard with credentials is never allowed. Omit the variable to keep CORS disabled (default).
 
 **4. Network Isolation:**
 Use `podman play kube --network isolated kube.yaml` (see Quick Start).
@@ -523,7 +525,7 @@ curl -k -u user:pass https://localhost:8443/health
 ls -la models/
 
 # Verify model configuration in kube.yaml
-grep -E "MODEL_DIRECTORY|LLAMA_CPP_MODEL_NAME|EMBEDDING_MODEL_NAME|RERANK_MODEL_NAME" kube.yaml
+grep -E "MODEL_DIRECTORY|LLM_MODEL|EMBEDDING_MODEL_NAME|RERANK_MODEL_NAME" kube.yaml
 
 # Check llama.cpp logs for errors
 podman logs llama-cpp-server-deployment-pod-llama-cpp-server | grep -i error

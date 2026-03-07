@@ -86,17 +86,11 @@ class VectorStoreManager:
             logger.error(f"Error adding documents to vector store: {e}")
             raise
     
-    def similarity_search(self, query: str, k: int = 4, 
+    def similarity_search(self, query: str, k: int = 4,
                          filter_metadata: Optional[Dict[str, Any]] = None) -> List[Document]:
         """Search for similar documents."""
         try:
-            if filter_metadata:
-                results = self.vector_store.similarity_search(
-                    query, k=k, filter=filter_metadata
-                )
-            else:
-                results = self.vector_store.similarity_search(query, k=k)
-
+            results = self.vector_store.similarity_search(query, k=k, filter=filter_metadata)
             logger.debug(f"Found {len(results)} similar documents")
             return results
 
@@ -133,7 +127,7 @@ class VectorStoreManager:
                 "collection_name": self.collection_name,
                 "document_count": 0,
                 "persist_directory": self.persist_directory,
-                "error": str(e)
+                "error": "Failed to retrieve collection info"
             }
 
     def delete_collection(self):

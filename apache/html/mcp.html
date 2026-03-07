@@ -38,6 +38,11 @@
 			font-size: 13px;
 			margin-top: 12px;
 		}
+
+		.trace-box.trace-error {
+			border-color: #c62828;
+			background-color: #fff0f0;
+		}
 	</style>
 </head>
 <body>
@@ -50,6 +55,7 @@
 				This page calls a local HTTP bridge endpoint <span class="pill">/mcp/chat</span> which executes MCP tools server-side.
 				If you haven't enabled the bridge API/proxy, requests will fail.
 			</div>
+			<div class="hint">The sample PostgreSQL dataset in this repo uses <span class="pill">app.users</span>.</div>
 
 			<div class="form-group">
 				<label for="model">Model</label>
@@ -61,7 +67,7 @@
 
 			<div class="form-group">
 				<label for="prompt">Prompt</label>
-				<textarea id="prompt" class="textbox-container" rows="10" placeholder="Ask something that may require database tools...">List available tables, then show 3 rows from wb_table.</textarea>
+				<textarea id="prompt" class="textbox-container" rows="10" placeholder="Ask something that may require database tools...">List available tables, then show 3 rows from app.users.</textarea>
 				<div class="hint">
 					Tip: mention what you want from PostgreSQL; the bridge will run read-only tools (SELECT only).
 				</div>
@@ -101,6 +107,15 @@
 
 			// Reuse shared copy/clear + Ctrl+Enter + think toggle.
 			setupCommonUI({ submitBtn, responseDiv, loadingDiv, copyBtn, clearBtn, promptInput });
+			clearBtn.addEventListener('click', () => {
+				toolTraceDiv.textContent = '';
+				toolTraceDiv.classList.add('hidden');
+				toolTraceDiv.classList.remove('trace-error');
+			});
+
+			function traceHasFailure(trace) {
+				return trace.some((item) => item?.ok === false);
+			}
 
 			async function submit() {
 				const model = (modelSelect && modelSelect.value) ? modelSelect.value : '';
@@ -116,6 +131,7 @@
 				responseDiv.classList.remove('error-text');
 				toolTraceDiv.textContent = '';
 				toolTraceDiv.classList.add('hidden');
+				toolTraceDiv.classList.remove('trace-error');
 				copyBtn.classList.add('hidden');
 				submitBtn.disabled = true;
 
@@ -145,6 +161,7 @@
 
 					if (Array.isArray(data?.tool_trace) && data.tool_trace.length > 0) {
 						toolTraceDiv.classList.remove('hidden');
+						toolTraceDiv.classList.toggle('trace-error', traceHasFailure(data.tool_trace));
 						toolTraceDiv.textContent = JSON.stringify(data.tool_trace, null, 2);
 					}
 				} catch (e) {
