@@ -1,59 +1,10 @@
-# 0. ConfigMap for non-secret environment variables
+# Runtime Config:
+# - Settings live in config/model-config.yaml
+# - Local PostgreSQL credentials live in config/postgresql-credentials.yaml
 #
-# Policy (keep it simple):
-# - Shared, non-sensitive settings live in this ConfigMap and are injected via envFrom.
-# - Secrets (passwords/tokens) live in a Secret and are injected via env.
-# - Pod-specific one-off settings can stay in the individual Deployment when it improves clarity.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: model-config
-data:
-  # Model Configuration
-  MODEL_DIRECTORY: /models
-  EMBEDDING_MODEL_NAME: Qwen3-Embedding-0.6B-Q8_0
-  RERANK_MODEL_NAME: qwen3-reranker-0.6b-q8_0
-  # RAG Service Configuration (non-secret)
-  # Podman play kube resolves the pod/deployment name (e.g. 'llama-cpp-server'),
-  # but not the Kubernetes Service name 'llama-cpp-server-service'.
-  LLAMA_CPP_BASE_URL: "http://llama-cpp-server:11434"
-  EMBEDDING_API_BASE: "http://embedding-service:8080/v1"
-  RERANK_API_BASE: "http://rerank-service:8080/v1"
-  RETRIEVAL_CANDIDATES: "50"
-  RERANK_TOP_K: "5"
-  # MCP Bridge Configuration (non-secret)
-  LLM_BASE_URL: "http://llama-cpp-server:11434/v1"
-  LLM_MODEL: "Qwen3-0.6B-Q8_0"
-  # For local llama.cpp OpenAI-compatible server, any non-empty key is fine.
-  # If you later use a real remote provider, move this to a Secret.
-  OPENAI_API_KEY: "local"
-  PG_HOST: "postgresql"
-  PG_PORT: "5432"
-  PG_DATABASE: "app_db"
-  # File Upload Security Limits
-  MAX_FILE_SIZE_MB: "10"
-  MAX_UPLOAD_SIZE_MB: "50"
-  MAX_FILES_PER_UPLOAD: "10"
-  # Path Security
-  ALLOWED_DOCUMENT_PATHS: /app/documents,/tmp/rag_uploads
-  # Logging
-  LOG_LEVEL: INFO
----
-# 0.5 Secret for PostgreSQL credentials (local development defaults)
-# For production: create this Secret separately and DO NOT commit real passwords.
-# Example: kubectl create secret generic postgresql-credentials --from-literal=...
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgresql-credentials
-type: Opaque
-stringData:
-  # PostgreSQL superuser password (used by postgres container)
-  POSTGRES_PASSWORD: "postgres"
-  # Application user credentials (created by init.sql)
-  PG_USER: "app_user"
-  PG_PASSWORD: "app_password"
----
+# Start example:
+#   cat config/model-config.yaml config/postgresql-credentials.yaml kube.yaml | podman play kube -
+#
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -87,13 +38,24 @@ spec:
         - -n
         - "16384"
         - -c
-        - "16384"
+        - "32768"
         - -np
         - "1"
+        - --temp
+        - "1.0"
+        - --top-p
+        - "0.95"
+        - --min-p
+        - "0.01"
         - -sps
         - "0.5"
         - --cache-reuse
         - "128"
+        - --kv-unified
+        - --cache-type-k
+        - "q8_0"
+        - --cache-type-v
+        - "q8_0"
         - -fa
         - 'auto'
         - --chat-template-kwargs

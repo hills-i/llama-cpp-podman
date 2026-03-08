@@ -6,7 +6,8 @@ models/*
 .venv
 backups/*
 scripts/*
-tests/
+tests/*
+rag-service/tests/
 rag-service/data/chroma_db*
 rag-service/documents/*
 rag-service/models/*
@@ -29,6 +30,8 @@ __pycache__/
 .Spotlight-V100
 .Trashes
 .env
+config/postgresql-credentials.yaml
+config/model-config.yaml
 ehthumbs.db
 Thumbs.db
 
@@ -36,6 +39,7 @@ AGENTS.md
 CODE_REVIEW.md
 .claude/
 CLAUDE.md
+README-test.md
 SECURITY_CHECKLIST.md
 SECURITY_FIXES_SUMMARY.md
 SYSTEM_STATE.md
@@ -46,6 +50,3 @@ init.sh
 init.template.sh
 init.sql
 postgres_password.txt
-
-play-kube.sh
-stop-kube.sh

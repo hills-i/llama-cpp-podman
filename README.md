@@ -46,7 +46,7 @@ wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gg
 # Place the files under:
 #   rag-service/models/embedding/$(EMBEDDING_MODEL_NAME).gguf
 #   rag-service/models/reranker/$(RERANK_MODEL_NAME).gguf
-# Names are configured in kube.yaml (model-config ConfigMap).
+# Names are configured in config/model-config.yaml.
 
 # Build local images used by kube.yaml
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
@@ -59,10 +59,10 @@ podman build -t opencode-service:latest -f opencode-service/Dockerfile opencode-
 ```bash
 # Production mode (with network isolation)
 podman network create --internal isolated
-podman play kube --network isolated kube.yaml
+./play-kube.sh
 
 # Development mode (without isolation)
-podman play kube kube.yaml
+cat config/model-config.yaml config/postgresql-credentials.yaml kube.yaml | podman play kube -
 ```
 
 ### 3. Access Web Interface
@@ -103,7 +103,12 @@ graph TB
 ```
 llama-cpp/
 ├── 🐳 Container Configs
-│   └─── kube.yaml             # Kubernetes deployment
+│   ├── kube.yaml             # Kubernetes deployment
+│   └── config/
+│       ├── model-config.yaml.example
+│       ├── model-config.yaml  # model settings (excluded from git)
+│       ├── postgresql-credentials.yaml.example
+│       └── postgresql-credentials.yaml  # postgres settings (excluded from git)
 ├── 🌐 Apache Setup
 │   ├── conf/
 │   │   └── httpd.conf        # Reverse proxy + security
@@ -158,7 +163,7 @@ llama-cpp/
 
 ```bash
 # Stop services
-podman play kube --down kube.yaml
+./stop-kube.sh
 
 # Restart specific service
 podman restart rag-service-deployment-pod-rag-service
@@ -196,6 +201,7 @@ This repo includes an optional **local-only MCP bridge** that lets the model cal
 ### kube.yaml integration
 
 [kube.yaml](kube.yaml) defines optional `postgresql` and `mcp-bridge` Deployments.
+Shared settings are in [config/model-config.yaml](config/model-config.yaml), and local PostgreSQL credentials are read from `config/postgresql-credentials.yaml`.
 
 - PostgreSQL initialization:
     - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
@@ -222,7 +228,7 @@ podman exec -it mcp-bridge-deployment-pod-mcp-bridge \
 
 ### Model Configuration
 
-Update kube.yaml with your model settings in the `model-config` ConfigMap:
+Update `config/model-config.yaml` with your model settings:
 
 ```yaml
 kind: ConfigMap
@@ -232,14 +238,14 @@ data:
     MODEL_DIRECTORY: /models
 ```
 
-The RAG service uses these key environment variables (see kube.yaml `model-config` ConfigMap):
+The RAG service uses these key environment variables (see `config/model-config.yaml`):
 - `LLAMA_CPP_BASE_URL` (default: `http://llama-cpp-server:11434`)
 - `LLM_MODEL` (model id from llama.cpp `/v1/models`)
 - `EMBEDDING_API_BASE` / `EMBEDDING_MODEL_NAME`
 - `RERANK_API_BASE` / `RERANK_MODEL_NAME`
 - `RETRIEVAL_CANDIDATES` / `RERANK_TOP_K`
 
-The MCP bridge uses these key environment variables (see kube.yaml `model-config` ConfigMap; for host runs, see [mcp-script/.env.template](mcp-script/.env.template)):
+The MCP bridge uses these key environment variables (see `config/model-config.yaml`; for host runs, see [mcp-script/.env.template](mcp-script/.env.template)):
 
 - `LLM_BASE_URL` (example in-cluster: `http://llama-cpp-server:11434/v1`)
 - `LLM_MODEL` (model id from `GET /v1/models`)
@@ -367,14 +373,14 @@ print(f'{username}:{encrypted}')
 
 **3. CORS Configuration:**
 
-Set `CORS_ALLOW_ORIGINS` in the `model-config` ConfigMap in kube.yaml (comma-separated):
+Set `CORS_ALLOW_ORIGINS` in `config/model-config.yaml` (comma-separated):
 ```yaml
 CORS_ALLOW_ORIGINS: "https://yourdomain.com"
 ```
 Wildcard with credentials is never allowed. Omit the variable to keep CORS disabled (default).
 
 **4. Network Isolation:**
-Use `podman play kube --network isolated kube.yaml` (see Quick Start).
+Use `./play-kube.sh` (see Quick Start).
 
 **5. Firewall Rules:**
 ```bash
@@ -401,8 +407,8 @@ sudo ufw deny 11434/tcp   # Block direct LLM access
 cp your-model.gguf models/
 
 # Restart services
-podman play kube --down kube.yaml
-podman play kube kube.yaml
+./stop-kube.sh
+./play-kube.sh
 ```
 
 ### Bulk Document Processing
@@ -477,8 +483,8 @@ podman logs rag-service-deployment-pod-rag-service
 # Rebuild RAG service
 cd rag-service
 podman build -t rag-service:latest .
-podman play kube --down kube.yaml
-podman play kube kube.yaml
+./stop-kube.sh
+./play-kube.sh
 ```
 
 </details>
@@ -493,8 +499,8 @@ podman logs postgresql-deployment-pod-postgresql | tail -n 200
 # If you need to re-apply init.sql, delete persistent data and restart
 rm -rf mcp-script/postgresql-data
 mkdir -p mcp-script/postgresql-data
-podman play kube --down kube.yaml
-podman play kube kube.yaml
+./stop-kube.sh
+./play-kube.sh
 
 # Check the bridge can reach llama.cpp and Postgres
 podman exec -it mcp-bridge-deployment-pod-mcp-bridge curl -s http://localhost:8090/mcp/health | cat
@@ -573,12 +579,3 @@ rm -rf rag-service/data/chroma_db/
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **llama.cpp team** for the excellent inference engine
-- **ChromaDB** for the vector database
-- **Qwen team** for the embedding models
-- **BAAI** for the reranker models
-
-

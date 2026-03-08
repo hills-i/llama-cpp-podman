@@ -2,6 +2,7 @@
 
 import os
 import logging
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
@@ -222,6 +223,13 @@ async def query_rag(request: QueryRequest):
         question=request.question,
         include_sources=request.include_sources,
     )
+    if result.get("error") == "rate_limited":
+        retry_after = int(result.get("retry_after", 0))
+        raise HTTPException(
+            status_code=429,
+            detail=result["answer"],
+            headers={"Retry-After": str(retry_after)},
+        )
     return QueryResponse(**result)
 
 
@@ -232,7 +240,7 @@ async def search_documents(request: QueryRequest):
         raise HTTPException(status_code=503, detail="RAG system not initialized")
 
     results = rag_chain.simple_retrieval(request.question, k=request.k)
-    return [DocumentInfo(**result) for result in results]
+    return [DocumentInfo(**result) for result in results[:request.k]]
 
 
 @app.post("/upload")
@@ -251,8 +259,10 @@ async def upload_documents(files: List[UploadFile] = File(...)):
         )
 
     # Create temporary directory for uploaded files
-    upload_dir = Path("/tmp/rag_uploads")
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_root = Path("/tmp/rag_uploads")
+    upload_root.mkdir(parents=True, exist_ok=True)
+    upload_dir = upload_root / uuid.uuid4().hex
+    upload_dir.mkdir(parents=True, exist_ok=False)
 
     uploaded_files = []
     total_size = 0
@@ -329,11 +339,10 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 
     finally:
         # Clean up temporary files
-        for file_path in uploaded_files:
-            try:
-                os.remove(file_path)
-            except OSError as exc:
-                logger.warning("Failed to remove temp upload", extra={"path": file_path, "error": str(exc)})
+        try:
+            shutil.rmtree(upload_dir)
+        except OSError as exc:
+            logger.warning("Failed to remove temp upload", extra={"path": str(upload_dir), "error": str(exc)})
 
 
 @app.post("/ingest")
@@ -370,6 +379,9 @@ async def clear_documents():
         raise HTTPException(status_code=503, detail="Vector store not initialized")
     
     vector_store_manager.delete_collection()
+    collection_info = vector_store_manager.get_collection_info()
+    if collection_info.get("error") or collection_info.get("document_count") != 0:
+        raise HTTPException(status_code=500, detail="Failed to clear documents")
     return {"message": "All documents cleared successfully"}
 
 
