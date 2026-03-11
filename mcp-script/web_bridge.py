@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 import json
 import os
 import sys
@@ -262,29 +262,15 @@ class RateLimiter:
 
 class _MCPState:
     def __init__(self) -> None:
-        self.exit_stack: AsyncExitStack | None = None
-        self.session: Any | None = None
         self.lock: asyncio.Lock = asyncio.Lock()
         self.llm: AsyncOpenAI | None = None
-        self.client_session_cls: Any | None = None
-        self.stdio_server_params_cls: Any | None = None
-        self.stdio_client_fn: Any | None = None
         self.rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
 
 
-async def _start_mcp_session(mcp_state: _MCPState) -> None:
-    """Start the MCP stdio server subprocess once and keep a persistent session."""
-    if mcp_state.exit_stack is not None:
-        return
-
-    base_url = _get_env("LLM_BASE_URL", "http://localhost:8080/v1")
-    api_key = _get_env("OPENAI_API_KEY", "local")
-    mcp_state.llm = AsyncOpenAI(base_url=base_url, api_key=api_key)
-
+@asynccontextmanager
+async def _mcp_client_session():
+    """Create a per-request MCP stdio session in a single task context."""
     ClientSession, StdioServerParameters, stdio_client = _import_mcp_client()
-    mcp_state.client_session_cls = ClientSession
-    mcp_state.stdio_server_params_cls = StdioServerParameters
-    mcp_state.stdio_client_fn = stdio_client
 
     pg_server_path = Path(__file__).with_name("pg_server.py")
     if not pg_server_path.exists():
@@ -296,36 +282,10 @@ async def _start_mcp_session(mcp_state: _MCPState) -> None:
         env=os.environ.copy(),
     )
 
-    exit_stack = AsyncExitStack()
-    try:
-        read_stream, write_stream = await exit_stack.enter_async_context(stdio_client(server_params))
-        session = ClientSession(read_stream, write_stream)
-        session = await exit_stack.enter_async_context(session)
-        await session.initialize()
-    except Exception:
-        await exit_stack.aclose()
-        raise
-
-    mcp_state.exit_stack = exit_stack
-    mcp_state.session = session
-
-
-async def _stop_mcp_session(mcp_state: _MCPState) -> None:
-    """Stop the MCP session and clean up resources."""
-    if mcp_state.exit_stack is None:
-        return
-
-    try:
-        await mcp_state.exit_stack.aclose()
-    finally:
-        mcp_state.exit_stack = None
-        mcp_state.session = None
-
-
-async def _restart_mcp_session(mcp_state: _MCPState) -> None:
-    """Restart the MCP session (stop then start)."""
-    await _stop_mcp_session(mcp_state)
-    await _start_mcp_session(mcp_state)
+    async with stdio_client(server_params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            yield session
 
 
 # ============================================================================
@@ -342,12 +302,10 @@ async def lifespan(app: FastAPI):
     _load_env()
     mcp_state = _MCPState()
     app.state.mcp = mcp_state
-    
-    try:
-        await _start_mcp_session(mcp_state)
-        yield
-    finally:
-        await _stop_mcp_session(mcp_state)
+    base_url = _get_env("LLM_BASE_URL", "http://localhost:8080/v1")
+    api_key = _get_env("OPENAI_API_KEY", "local")
+    mcp_state.llm = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    yield
 
 
 app = FastAPI(title="mcp-bridge", version="0.1", lifespan=lifespan)
@@ -489,44 +447,29 @@ async def chat(request: Request, req: ChatRequest) -> ChatResponse:
             headers={"Retry-After": str(retry_after)},
         )
 
-    # Ensure session is started with proper locking to avoid race conditions
-    async with mcp_state.lock:
-        if mcp_state.exit_stack is None or mcp_state.session is None or mcp_state.llm is None:
-            try:
-                await _start_mcp_session(mcp_state)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=503,
-                    detail="MCP session initialization failed. Service temporarily unavailable."
-                ) from e
-
     try:
-        assert mcp_state.session is not None
         assert mcp_state.llm is not None
 
-        return await _chat_with_trace(
-            mcp_state.llm,
-            mcp_state.session,
-            req,
-            session_lock=mcp_state.lock,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        # If the stdio subprocess/session died, restart once and retry.
-        try:
-            async with mcp_state.lock:
-                await _restart_mcp_session(mcp_state)
-            
-            assert mcp_state.session is not None
-            assert mcp_state.llm is not None
-            
+        async with _mcp_client_session() as session:
             return await _chat_with_trace(
                 mcp_state.llm,
-                mcp_state.session,
+                session,
                 req,
                 session_lock=mcp_state.lock,
             )
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            assert mcp_state.llm is not None
+
+            async with _mcp_client_session() as session:
+                return await _chat_with_trace(
+                    mcp_state.llm,
+                    session,
+                    req,
+                    session_lock=mcp_state.lock,
+                )
         except Exception:
             # Don't leak internal error details
             raise HTTPException(

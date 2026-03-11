@@ -16,11 +16,19 @@ A production-ready containerized setup for running **llama.cpp inference server*
 ### 1. Setup
 
 ```bash
+# Create local config files from examples
+cp config/model-config.yaml.example config/model-config.yaml
+cp config/postgresql-credentials.yaml.example config/postgresql-credentials.yaml
+
 # Create required directories
 mkdir -p \
     apache/certs \
+    apache/logs \
     models \
-    rag-service/documents rag-service/data/chroma_db rag-service/models \
+    rag-service/documents \
+    rag-service/data \
+    rag-service/models/embedding \
+    rag-service/models/reranker \
     mcp-script/postgresql-data
 
 # Set SELinux context (if SELinux is enabled on RHEL/Fedora/CentOS)
@@ -42,11 +50,20 @@ chmod 644 apache/certs/server.crt
 # Download your GGUF model to models/ directory
 wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf -O models/Qwen3-0.6B-Q8_0.gguf
 
-# Add embedding and reranker GGUF files
-# Place the files under:
-#   rag-service/models/embedding/$(EMBEDDING_MODEL_NAME).gguf
-#   rag-service/models/reranker/$(RERANK_MODEL_NAME).gguf
-# Names are configured in config/model-config.yaml.
+# Create BASIC auth credentials expected by apache/conf/httpd.conf
+python3 -c "
+import crypt
+username = 'user'
+password = 'pass'
+encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
+print(f'{username}:{encrypted}')
+" > apache/.htpasswd
+
+# Add model files whose basenames match config/model-config.yaml
+#   models/${LLM_MODEL}.gguf
+#   models/${MMPROJ_MODEL_NAME}.gguf
+#   rag-service/models/embedding/${EMBEDDING_MODEL_NAME}.gguf
+#   rag-service/models/reranker/${RERANK_MODEL_NAME}.gguf
 
 # Build local images used by kube.yaml
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
@@ -82,8 +99,8 @@ graph TB
     D -->|Reranking| G[llama.cpp rerank-service]
     D -->|Vector Store| H[ChromaDB]
     D -->|LLM Calls| C
-    J[MCP Bridge (optional)] -->|OpenAI-compatible chat| C
-    J -->|Read-only SQL tools| I[PostgreSQL (optional)]
+    J[MCP Bridge] -->|chat| C
+    J -->|Read-only SQL tools| I[PostgreSQL]
     
     subgraph "Container Network"
         B
@@ -127,7 +144,7 @@ llama-cpp/
 │       ├── css/              # Stylesheets
 │       └── js/               # Client-side functionality
 ├── 🤖 Models
-│   └── *.gguf               # GGUF model files (excluded from git)
+│   └── *.gguf                # Main llama.cpp + mmproj GGUF files
 ├── 🧠 RAG Service
 │   ├── src/
 │   │   ├── main.py           # FastAPI application
@@ -268,9 +285,9 @@ The MCP bridge uses these key environment variables (see `config/model-config.ya
 ### Dependencies
 
 The RAG service uses LangChain 1.1.x with modular packages (see [rag-service/requirements.txt](rag-service/requirements.txt)):
-- `langchain`, `langchain-classic`, `langchain-core`, `langchain-community`, `langchain-openai`
-- `chromadb`, `fastapi`, `uvicorn`, `requests`, `openai`
-- `pypdf`, `python-docx` for document parsing
+- `langchain-classic`, `langchain-core`, `langchain-community`, `langchain-openai`, `langchain-text-splitters`
+- `chromadb`, `fastapi`, `uvicorn`, `requests`, `openai`, `python-multipart`
+- `pypdf`, `docx2txt` for document parsing
 
 ### API Reference
 
@@ -302,11 +319,11 @@ Response: {"message": "Successfully uploaded and processed 1 files", "documents_
 # Bulk Ingest
 POST /rag/ingest
 Form: directory_path=/app/documents
-Response: {"message": "Successfully ingested documents from /app/documents", "documents_added": 12, "directory": "/app/documents"}
+Response: {"message": "Successfully ingested documents", "documents_added": 12}
 
 # Clear Database
 DELETE /rag/documents
-Response: {"message": "All documents cleared"}
+Response: {"message": "All documents cleared successfully"}
 
 # Delete by content
 POST /rag/documents/delete-by-content

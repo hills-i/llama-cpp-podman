@@ -5,6 +5,8 @@ metadata:
 data:
   # Model Configuration
   MODEL_DIRECTORY: /models
+  LLM_MODEL: Qwen3-0.6B-Q8_0
+  MMPROJ_MODEL_NAME: mmproj-BF16
   EMBEDDING_MODEL_NAME: Qwen3-Embedding-0.6B-Q8_0
   RERANK_MODEL_NAME: qwen3-reranker-0.6b-q8_0
   # RAG Service Configuration (non-secret)
@@ -17,7 +19,6 @@ data:
   RERANK_TOP_K: "5"
   # MCP Bridge Configuration (non-secret)
   LLM_BASE_URL: "http://llama-cpp-server:11434/v1"
-  LLM_MODEL: "Qwen3-0.6B-Q8_0"
   # For local llama.cpp OpenAI-compatible server, any non-empty key is fine.
   # If you later use a real remote provider, move this to a Secret.
   OPENAI_API_KEY: "local"

@@ -1,9 +1,4 @@
-FROM docker.io/node:24-slim
-
-# Install system tools for development
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git vim nano curl python3 python3-pip bash \
-    && rm -rf /var/lib/apt/lists/*
+FROM docker.io/library/node:24-slim
 
 # Install OpenCode CLI globally
 RUN npm install -g opencode-ai

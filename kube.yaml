@@ -29,8 +29,10 @@ spec:
         - configMapRef:
             name: model-config
         args:
-        - --models-dir
-        - $(MODEL_DIRECTORY)
+        - --model
+        - /models/$(LLM_MODEL).gguf 
+        - --mmproj
+        - /models/$(MMPROJ_MODEL_NAME).gguf
         - --port
         - "11434"
         - --host

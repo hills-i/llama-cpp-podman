@@ -1,6 +1,3 @@
-# Host-side dependencies for the local MCP <-> llama.cpp bridge.
-# Note: This is separate from rag-service/requirements.txt.
-
 mcp
 openai
 psycopg[binary]

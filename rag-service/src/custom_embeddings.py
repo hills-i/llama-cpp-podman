@@ -24,7 +24,7 @@ class LlamaCppEmbeddingClient(Embeddings):
     *,
     api_base: Optional[str] = None,
     model: Optional[str] = None,
-    timeout_seconds: int = 30,
+    timeout_seconds: int = 180,
   ) -> None:
     self.api_base = api_base or os.getenv("EMBEDDING_API_BASE", DEFAULT_EMBEDDING_API_BASE)
     self.model = model or os.getenv("EMBEDDING_MODEL_NAME", DEFAULT_EMBEDDING_MODEL)
