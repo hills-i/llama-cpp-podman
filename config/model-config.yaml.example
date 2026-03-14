@@ -4,8 +4,7 @@ metadata:
   name: model-config
 data:
   # Model Configuration
-  MODEL_DIRECTORY: /models
-  LLM_MODEL: Qwen3-0.6B-Q8_0
+  LLM_MODEL_NAME: Qwen3-0.6B-Q8_0
   MMPROJ_MODEL_NAME: mmproj-BF16
   EMBEDDING_MODEL_NAME: Qwen3-Embedding-0.6B-Q8_0
   RERANK_MODEL_NAME: qwen3-reranker-0.6b-q8_0

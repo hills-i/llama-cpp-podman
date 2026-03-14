@@ -6,6 +6,7 @@ models/*
 .venv
 backups/*
 scripts/*
+!scripts/monitor.sh
 tests/*
 rag-service/tests/
 rag-service/data/chroma_db*
@@ -50,3 +51,4 @@ init.sh
 init.template.sh
 init.sql
 postgres_password.txt
+*-kube.yaml

@@ -47,9 +47,6 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 chmod 600 apache/certs/server.key
 chmod 644 apache/certs/server.crt
 
-# Download your GGUF model to models/ directory
-wget https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf -O models/Qwen3-0.6B-Q8_0.gguf
-
 # Create BASIC auth credentials expected by apache/conf/httpd.conf
 python3 -c "
 import crypt
@@ -58,12 +55,6 @@ password = 'pass'
 encrypted = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 print(f'{username}:{encrypted}')
 " > apache/.htpasswd
-
-# Add model files whose basenames match config/model-config.yaml
-#   models/${LLM_MODEL}.gguf
-#   models/${MMPROJ_MODEL_NAME}.gguf
-#   rag-service/models/embedding/${EMBEDDING_MODEL_NAME}.gguf
-#   rag-service/models/reranker/${RERANK_MODEL_NAME}.gguf
 
 # Build local images used by kube.yaml
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
@@ -79,7 +70,13 @@ podman network create --internal isolated
 ./play-kube.sh
 
 # Development mode (without isolation)
-cat config/model-config.yaml config/postgresql-credentials.yaml kube.yaml | podman play kube -
+{
+  cat config/model-config.yaml
+  printf '\n---\n'
+  cat config/postgresql-credentials.yaml
+  printf '\n---\n'
+  cat kube.yaml
+} | podman play kube -
 ```
 
 ### 3. Access Web Interface
@@ -159,13 +156,13 @@ llama-cpp/
 │   ├── models/               # Embedding and rerank models (excluded from git)
 │   ├── requirements.txt
 │   └── Dockerfile
-├── 🧩 MCP Bridge (optional)
+├── 🧩 MCP Bridge
 │   ├── bridge.py             # CLI bridge (llama.cpp ↔ MCP)
 │   ├── web_bridge.py         # FastAPI bridge (HTTP)
 │   ├── pg_server.py          # MCP server exposing read-only PG tools
 │   ├── postgresql/init.sql   # Example schema/data loaded on first init
 │   └── postgresql-data/      # Postgres persistent data (hostPath)
-├── 💻 opencode-service (optional)
+├── 💻 opencode-service
 │   ├── Dockerfile            # Node.js + OpenCode CLI
 │   └── entrypoint.sh
 ├── dev-dir/                  # Workspace mounted into opencode-service at /workspace
@@ -190,30 +187,24 @@ podman restart llama-cpp-server-deployment-pod-llama-cpp-server
 ### Monitoring and Logs
 
 ```bash
-# Container status
-podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+# Status overview
+./scripts/monitor.sh
 
-# Service logs
-podman logs -f llama-cpp-server-deployment-pod-llama-cpp-server
-podman logs -f rag-service-deployment-pod-rag-service
-podman logs -f embedding-service-deployment-pod-embedding-service
-podman logs -f rerank-service-deployment-pod-rerank-service
-podman logs -f apache-deployment-pod-apache
+# Follow logs for one service
+./scripts/monitor.sh logs apache
 
-# Optional components
-podman logs -f postgresql-deployment-pod-postgresql
-podman logs -f mcp-bridge-deployment-pod-mcp-bridge
+# Show recent logs without follow
+./scripts/monitor.sh tail postgres 200
+
+# Show service aliases
+./scripts/monitor.sh list
 
 # Health checks
-curl -k -u user:pass https://localhost:8443/health
-curl -k -u user:pass https://localhost:8443/rag/status
+./scripts/monitor.sh health
 ```
 
-## 🧩 MCP Bridge (PostgreSQL tools)
-
-This repo includes an optional **local-only MCP bridge** that lets the model call **read-only** PostgreSQL tools (SELECT-only) to fetch facts from a database.
-
-- Tools exposed: `list_tables`, `query_database` (read-only)
+`scripts/monitor.sh` wraps the common `podman ps`, `podman logs -f`, and HTTPS health checks.
+Override defaults with `MONITOR_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASS` when needed.
 
 ### kube.yaml integration
 
@@ -224,22 +215,6 @@ Shared settings are in [config/model-config.yaml](config/model-config.yaml), and
     - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
     - It runs **only on first init** (when the data directory is empty).
     - To re-apply, delete the hostPath directory [mcp-script/postgresql-data/](mcp-script/postgresql-data/) and restart.
-
-### Quick sanity check (inside the container)
-
-The `mcp-bridge` container runs a small FastAPI app on port `8090`.
-
-```bash
-# Health
-podman exec -it mcp-bridge-deployment-pod-mcp-bridge \
-    curl -s http://localhost:8090/mcp/health | cat
-
-# Chat (the bridge will call MCP tools as needed)
-podman exec -it mcp-bridge-deployment-pod-mcp-bridge \
-    curl -s -X POST http://localhost:8090/mcp/chat \
-    -H 'content-type: application/json' \
-    -d '{"message":"list tables"}' | cat
-```
 
 ## ⚙️ Configuration
 
@@ -252,11 +227,12 @@ kind: ConfigMap
 metadata:
     name: model-config
 data:
-    MODEL_DIRECTORY: /models
+    LLM_MODEL_NAME: Qwen3-0.6B-Q8_0
 ```
 
 The RAG service uses these key environment variables (see `config/model-config.yaml`):
 - `LLAMA_CPP_BASE_URL` (default: `http://llama-cpp-server:11434`)
+- `LLM_MODEL_NAME` (GGUF basename used by `kube.yaml`)
 - `LLM_MODEL` (model id from llama.cpp `/v1/models`)
 - `EMBEDDING_API_BASE` / `EMBEDDING_MODEL_NAME`
 - `RERANK_API_BASE` / `RERANK_MODEL_NAME`
@@ -495,7 +471,7 @@ print(result["answer"])
 podman pod ps
 
 # Check container logs
-podman logs rag-service-deployment-pod-rag-service
+./scripts/monitor.sh tail rag
 
 # Rebuild RAG service
 cd rag-service
@@ -511,7 +487,7 @@ podman build -t rag-service:latest .
 
 ```bash
 # Check Postgres boot + init.sql ran (only on first init)
-podman logs postgresql-deployment-pod-postgresql | tail -n 200
+./scripts/monitor.sh tail postgres 200
 
 # If you need to re-apply init.sql, delete persistent data and restart
 rm -rf mcp-script/postgresql-data
@@ -519,9 +495,6 @@ mkdir -p mcp-script/postgresql-data
 ./stop-kube.sh
 ./play-kube.sh
 
-# Check the bridge can reach llama.cpp and Postgres
-podman exec -it mcp-bridge-deployment-pod-mcp-bridge curl -s http://localhost:8090/mcp/health | cat
-podman logs mcp-bridge-deployment-pod-mcp-bridge | tail -n 200
 ```
 
 </details>
@@ -548,15 +521,10 @@ curl -k -u user:pass https://localhost:8443/health
 ls -la models/
 
 # Verify model configuration in kube.yaml
-grep -E "MODEL_DIRECTORY|LLM_MODEL|EMBEDDING_MODEL_NAME|RERANK_MODEL_NAME" kube.yaml
+grep -E "LLM_MODEL|LLM_MODEL‗NAME|EMBEDDING_MODEL_NAME|RERANK_MODEL_NAME" kube.yaml
 
 # Check llama.cpp logs for errors
-podman logs llama-cpp-server-deployment-pod-llama-cpp-server | grep -i error
-
-# Test model manually
-podman exec -it llama-cpp-server-deployment-pod-llama-cpp-server \
-  /llama-server -m /models/your-model.gguf --help
-```
+./scripts/monitor.sh tail llm 200 | grep -i error
 
 </details>
 
@@ -595,4 +563,4 @@ rm -rf rag-service/data/chroma_db/
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.

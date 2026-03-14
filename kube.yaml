@@ -2,9 +2,6 @@
 # - Settings live in config/model-config.yaml
 # - Local PostgreSQL credentials live in config/postgresql-credentials.yaml
 #
-# Start example:
-#   cat config/model-config.yaml config/postgresql-credentials.yaml kube.yaml | podman play kube -
-#
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -30,7 +27,7 @@ spec:
             name: model-config
         args:
         - --model
-        - /models/$(LLM_MODEL).gguf 
+        - /models/$(LLM_MODEL_NAME).gguf 
         - --mmproj
         - /models/$(MMPROJ_MODEL_NAME).gguf
         - --port
