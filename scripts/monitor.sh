@@ -14,7 +14,7 @@ declare -A SERVICES=(
     [apache]="apache-deployment-pod-apache"
     [postgres]="postgresql-deployment-pod-postgresql"
     [mcp]="mcp-bridge-deployment-pod-mcp-bridge"
-    [opencode]="opencode-service-deployment-pod-opencode-service"
+    [aider]="aider-service-deployment-pod-aider-service"
 )
 
 print_usage() {
@@ -27,7 +27,7 @@ Usage:
   ./$SCRIPT_NAME list
 
 Services:
-  llm, rag, embedding, rerank, apache, postgres, mcp, opencode
+  llm, rag, embedding, rerank, apache, postgres, mcp, aider
 
 Environment variables:
   MONITOR_BASE_URL   Default: $BASE_URL
@@ -82,25 +82,31 @@ show_recent_logs() {
     podman logs --tail "$lines" "$container_name"
 }
 
+show_health_check() {
+    local label="$1"
+    local url="$2"
+    local auth="$3"
+    local status
+
+    status="$(curl --fail --silent --show-error -k -u "$auth" \
+        -o /dev/null -w '%{http_code}' "$url")"
+
+    printf '[%s] %s -> HTTP %s\n' "$label" "$url" "$status"
+}
+
 show_health() {
     require_command curl
 
     local auth="${BASIC_AUTH_USER}:${BASIC_AUTH_PASS}"
 
-    echo "[apache] $BASE_URL/health"
-    curl --fail --silent --show-error -k -u "$auth" \
-        "$BASE_URL/health"
-    printf '\n'
-
-    echo "[rag] $BASE_URL/rag/status"
-    curl --fail --silent --show-error -k -u "$auth" \
-        "$BASE_URL/rag/status"
-    printf '\n'
+    show_health_check "apache" "$BASE_URL/health" "$auth"
+    show_health_check "rag" "$BASE_URL/rag/status" "$auth"
+    show_health_check "aider" "$BASE_URL/aider/" "$auth"
 }
 
 list_services() {
     local service_name
-    for service_name in llm rag embedding rerank apache postgres mcp opencode; do
+    for service_name in llm rag embedding rerank apache postgres mcp aider; do
         printf '%-10s %s\n' "$service_name" "${SERVICES[$service_name]}"
     done
 }

@@ -415,31 +415,33 @@ spec:
               name: postgresql-credentials
               key: PG_PASSWORD
 ---
-# 9. opencode-service Deployment (interactive; exec into pod for TTY)
+# 9. aider-service Deployment (browser UI)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: opencode-service-deployment
+  name: aider-service-deployment
   labels:
-    app: opencode-service
+    app: aider-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: opencode-service
+      app: aider-service
   template:
     metadata:
       labels:
-        app: opencode-service
+        app: aider-service
     spec:
       containers:
-      - name: opencode-service
-        image: opencode-service:latest
+      - name: aider-service
+        image: aider-service:latest
         stdin: true
         tty: true
         envFrom:
         - configMapRef:
             name: model-config
+        ports:
+        - containerPort: 8501
         resources:
           limits:
             memory: "1Gi"
@@ -448,13 +450,13 @@ spec:
             memory: "256Mi"
             cpu: "100m"
         volumeMounts:
-        - name: dev-dir
+        - name: repo-workspace
           mountPath: /workspace
       volumes:
-      - name: dev-dir
+      - name: repo-workspace
         hostPath:
-          path: ./dev-dir
-          type: DirectoryOrCreate
+          path: ./aider-workspace
+          type: Directory
 ---
 # 10. apache Deployment
 apiVersion: apps/v1
@@ -552,7 +554,7 @@ spec:
             app: mcp-bridge
       - podSelector:
           matchLabels:
-            app: opencode-service
+            app: aider-service
       ports:
       - protocol: TCP
         port: 11434
@@ -661,19 +663,26 @@ spec:
         port: 8080
 
 ---
-# 14. NetworkPolicy: opencode-service egress only to llama-cpp-server + DNS
+# 14. NetworkPolicy: aider-service ingress from apache, egress to llama-cpp-server + DNS
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: opencode-service-network-policy
+  name: aider-service-network-policy
 spec:
   podSelector:
     matchLabels:
-      app: opencode-service
+      app: aider-service
   policyTypes:
     - Ingress
     - Egress
-  ingress: []
+  ingress:
+    - from:
+      - podSelector:
+          matchLabels:
+            app: apache
+      ports:
+      - protocol: TCP
+        port: 8501
   egress:
     # DNS
     - to:
