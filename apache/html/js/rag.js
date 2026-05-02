@@ -373,39 +373,30 @@ function displaySearchResults(results) {
         return;
     }
 
-    // Get the search query for generating dynamic similarity scores
-    const searchQuery = searchInput.value.trim().toLowerCase();
-
-    // Process results and add similarity scores
-    const processedResults = results.map((result, index) => {
-        // Handle similarity score - if 0.0 or N/A, generate realistic fallback scores
-        let score;
-        if (typeof result.similarity_score === 'number' && result.similarity_score > 0) {
-            score = parseFloat(result.similarity_score.toFixed(1));
-        } else {
-            // Generate query-dependent similarity scores based on content matching
-            score = parseFloat(calculateFallbackSimilarity(searchQuery, result.content, index));
-        }
-
-        return {
-            ...result,
-            calculatedScore: score,
-            originalIndex: index
-        };
-    });
-
-    // Sort by similarity score in descending order (highest first)
-    processedResults.sort((a, b) => b.calculatedScore - a.calculatedScore);
-
     let resultsHTML = '<div class="search-results-list">';
 
-    processedResults.forEach((result, displayIndex) => {
+    results.forEach((result, displayIndex) => {
         const safeSource = escapeHtml(result.metadata?.source || result.source || 'Unknown');
+        const hasSimilarityScore = typeof result.similarity_score === 'number';
+        const retrievalRank = result.retrieval_rank || result.metadata?.retrieval_rank || displayIndex + 1;
+        const rerankScore = typeof result.rerank_score === 'number'
+            ? result.rerank_score
+            : result.metadata?.rerank_score;
+        const scoreBadge = hasSimilarityScore
+            ? `Similarity: ${result.similarity_score.toFixed(1)}%`
+            : `Rank: ${retrievalRank}`;
+        const rerankBadge = typeof rerankScore === 'number'
+            ? `<span class="rerank-score">Rerank: ${rerankScore.toFixed(3)}</span>`
+            : '';
+
         resultsHTML += `
             <div class="search-result-item">
                 <div class="result-header">
                     <strong>Result ${displayIndex + 1}</strong>
-                    <span class="similarity-score">Similarity: ${result.calculatedScore}%</span>
+                    <span>
+                        <span class="similarity-score">${scoreBadge}</span>
+                        ${rerankBadge}
+                    </span>
                 </div>
                 <div class="result-content">${formatText(result.content)}</div>
                 <div class="result-source">Source: ${safeSource}</div>
@@ -416,60 +407,6 @@ function displaySearchResults(results) {
     resultsHTML += '</div>';
     searchResults.innerHTML = resultsHTML;
     searchResults.style.display = 'block';
-}
-
-// Cache for query processing to avoid redundant tokenization
-const queryCache = {
-    text: null,
-    words: null,
-    wordsSet: null,
-    lowerQuery: null
-};
-
-function calculateFallbackSimilarity(query, content, index) {
-    if (!query || !content) {
-        // Default ranking-based score if no query
-        return (85 - index * 5).toFixed(1);
-    }
-
-    // Cache expensive query operations
-    if (queryCache.text !== query) {
-        const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        queryCache.text = query;
-        queryCache.words = queryWords;
-        queryCache.wordsSet = new Set(queryWords);
-        queryCache.lowerQuery = query.toLowerCase();
-    }
-
-    const contentLower = content.toLowerCase();
-
-    // Quick exact phrase match check (most discriminative)
-    if (contentLower.includes(queryCache.lowerQuery)) {
-        return Math.max(85, 90 - index * 2).toFixed(1);
-    }
-
-    // Count word matches using Set for O(1) lookup
-    let matchScore = 0;
-    const contentWords = contentLower.split(/\s+/);
-
-    for (const word of contentWords) {
-        if (queryCache.wordsSet.has(word)) {
-            matchScore++;
-        }
-    }
-
-    // Calculate similarity percentage
-    const matchRatio = queryCache.words.length > 0
-        ? matchScore / queryCache.words.length
-        : 0;
-
-    let similarity = (matchRatio * 60) + 30 - (index * 3);
-
-    // Add small variance for realistic distribution
-    const variance = (content.length % 10) - 5;
-    similarity += variance;
-
-    return Math.max(25, Math.min(95, similarity)).toFixed(1);
 }
 
 function displaySearchError(message) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 import json
 import os
 import sys
@@ -27,6 +27,10 @@ MAX_TOOL_ITERATIONS = 10
 # Rate limiting: requests per minute per client
 RATE_LIMIT_REQUESTS = 20
 RATE_LIMIT_WINDOW_SECONDS = 60
+
+# MCP session startup can race while the stdio child process comes up.
+# Do not retry once chat/tool execution has started.
+MCP_SESSION_INIT_ATTEMPTS = 2
 
 
 def _load_env() -> None:
@@ -282,10 +286,23 @@ async def _mcp_client_session():
         env=os.environ.copy(),
     )
 
-    async with stdio_client(server_params) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as session:
+    for attempt in range(MCP_SESSION_INIT_ATTEMPTS):
+        stack = AsyncExitStack()
+        try:
+            read_stream, write_stream = await stack.enter_async_context(stdio_client(server_params))
+            session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
             await session.initialize()
+        except Exception:
+            await stack.aclose()
+            if attempt == MCP_SESSION_INIT_ATTEMPTS - 1:
+                raise
+            continue
+
+        try:
             yield session
+        finally:
+            await stack.aclose()
+        return
 
 
 # ============================================================================
@@ -460,22 +477,11 @@ async def chat(request: Request, req: ChatRequest) -> ChatResponse:
     except HTTPException:
         raise
     except Exception as e:
-        try:
-            assert mcp_state.llm is not None
-
-            async with _mcp_client_session() as session:
-                return await _chat_with_trace(
-                    mcp_state.llm,
-                    session,
-                    req,
-                    session_lock=mcp_state.lock,
-                )
-        except Exception:
-            # Don't leak internal error details
-            raise HTTPException(
-                status_code=500, 
-                detail="Bridge encountered an error. Please try again."
-            ) from e
+        # Don't leak internal error details
+        raise HTTPException(
+            status_code=500,
+            detail="Bridge encountered an error. Please try again."
+        ) from e
 
 
 def main() -> None:

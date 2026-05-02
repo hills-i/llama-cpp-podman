@@ -96,7 +96,11 @@ class QueryResponse(BaseModel):
 class DocumentInfo(BaseModel):
     content: str
     metadata: Dict[str, Any]
+    source: Optional[str] = None
     similarity_score: Optional[float] = None
+    retrieval_rank: Optional[int] = None
+    retrieval_method: Optional[str] = None
+    rerank_score: Optional[float] = None
 
 
 class StatusResponse(BaseModel):

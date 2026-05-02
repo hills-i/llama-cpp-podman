@@ -8,6 +8,7 @@ backups/*
 scripts/*
 !scripts/monitor.sh
 tests/*
+!tests/test_web_bridge_retry.py
 rag-service/tests/
 rag-service/data/chroma_db*
 rag-service/documents/*
