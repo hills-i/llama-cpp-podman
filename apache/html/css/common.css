@@ -125,6 +125,14 @@ button:hover {
     background-color: rgba(93, 92, 222, 0.9);
 }
 
+button.btn-stop {
+    background-color: #dc2626;
+}
+
+button.btn-stop:hover {
+    background-color: #b91c1c;
+}
+
 button:disabled {
     background-color: #a0a0a0;
     cursor: not-allowed;

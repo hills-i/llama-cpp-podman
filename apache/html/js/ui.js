@@ -101,7 +101,15 @@ function handleSubmit({
     submitBtn,
     errorMsg = 'API error occurred'
 }) {
+    let activeController = null;
+    const originalSubmitText = submitBtn.textContent;
+
     return async () => {
+        if (activeController) {
+            activeController.abort();
+            return;
+        }
+
         const model = modelSelect.value;
         const prompt = getPrompt();
 
@@ -114,7 +122,20 @@ function handleSubmit({
         responseDiv.innerHTML = '';
         responseDiv.classList.remove('error-text');
         copyBtn.classList.add('hidden');
-        submitBtn.disabled = true;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Stop';
+        submitBtn.classList.add('btn-stop');
+
+        const controller = new AbortController();
+        activeController = controller;
+        let rawText = '';
+        let aborted = false;
+
+        const renderResponse = () => {
+            // Escape first, then apply a tiny, safe subset of formatting.
+            // This ensures untrusted model output never becomes executable HTML.
+            responseDiv.innerHTML = formatSafeResponseHtml(escapeHtml(rawText));
+        };
 
         try {
             const requestBody = {
@@ -123,38 +144,123 @@ function handleSubmit({
                     { role: 'user', content: prompt }
                 ],
                 max_tokens: 2000,
-                stream: false
+                stream: true
             };
             const response = await fetch('/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(requestBody)
+                body: JSON.stringify(requestBody),
+                signal: controller.signal
             });
 
-            const data = await response.json();
-
             if (!response.ok) {
-                throw new Error(data.error?.message || errorMsg);
+                throw new Error(await getApiErrorMessage(response, errorMsg));
             }
 
-            const rawText = data?.choices?.[0]?.message?.content ?? '';
+            if (!response.body) {
+                throw new Error('Streaming response is not available in this browser.');
+            }
 
-            // Escape first, then apply a tiny, safe subset of formatting.
-            // This ensures untrusted model output never becomes executable HTML.
-            const escaped = escapeHtml(rawText);
-            const formatted = formatSafeResponseHtml(escaped);
-            responseDiv.innerHTML = formatted;
-            copyBtn.classList.remove('hidden');
+            await readChatCompletionStream(response.body, (contentDelta) => {
+                rawText += contentDelta;
+                renderResponse();
+            });
         } catch (error) {
-            responseDiv.textContent = `Error: ${error.message}`;
-            responseDiv.classList.add('error-text');
+            aborted = error.name === 'AbortError';
+
+            if (!aborted) {
+                responseDiv.textContent = `Error: ${error.message}`;
+                responseDiv.classList.add('error-text');
+                rawText = '';
+            }
         } finally {
+            activeController = null;
             loadingDiv.classList.add('hidden');
-            submitBtn.disabled = false;
+            submitBtn.textContent = originalSubmitText;
+            submitBtn.classList.remove('btn-stop');
+
+            if (rawText) {
+                renderResponse();
+                copyBtn.classList.remove('hidden');
+            }
         }
     };
+}
+
+async function readChatCompletionStream(body, onContentDelta) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+            if (processChatCompletionStreamLine(line, onContentDelta)) {
+                return;
+            }
+        }
+    }
+
+    buffer += decoder.decode();
+
+    if (buffer.trim()) {
+        const lines = buffer.split(/\r?\n/);
+        for (const line of lines) {
+            if (processChatCompletionStreamLine(line, onContentDelta)) {
+                return;
+            }
+        }
+    }
+}
+
+function processChatCompletionStreamLine(line, onContentDelta) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith(':')) {
+        return false;
+    }
+
+    if (!trimmed.startsWith('data:')) {
+        return false;
+    }
+
+    const data = trimmed.slice(5).trim();
+
+    if (data === '[DONE]') {
+        return true;
+    }
+
+    const parsed = JSON.parse(data);
+    const contentDelta = parsed?.choices?.[0]?.delta?.content ?? '';
+
+    if (contentDelta) {
+        onContentDelta(contentDelta);
+    }
+
+    return false;
+}
+
+async function getApiErrorMessage(response, fallbackMessage) {
+    const text = await response.text();
+
+    if (!text) {
+        return fallbackMessage;
+    }
+
+    try {
+        const data = JSON.parse(text);
+        return data.error?.message || fallbackMessage;
+    } catch {
+        return text || fallbackMessage;
+    }
 }
 
 function escapeHtml(text) {
