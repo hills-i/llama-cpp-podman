@@ -1,6 +1,6 @@
 # 🦙 llama.cpp on Podman
 
-A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Includes Apache HTTPD reverse proxy, ChromaDB vector store, a browser-based `aider` workspace, and an optional **MCP bridge** for safe, read-only PostgreSQL tools.
+A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Includes Apache HTTPD reverse proxy, ChromaDB vector store, browser-based `aider` and OpenCode workspaces, and an optional **MCP bridge** for safe, read-only PostgreSQL tools.
 
 ## ✨ Features
 
@@ -10,7 +10,7 @@ A production-ready containerized setup for running **llama.cpp inference server*
 - 🐳 **Containers** with a Podman kube stack
 - 📁 **Multi-Format Support** for PDF, DOCX, TXT, and JSON documents
 - 🧩 **MCP Bridge (optional)**: local-only, read-only PostgreSQL tools for the model
-- 💻 **Browser Coding Workspace** with `aider --browser`
+- 💻 **Browser Coding Workspaces** with `aider --browser` and OpenCode Web
 
 ## 🚀 Quick Start
 
@@ -26,6 +26,7 @@ mkdir -p \
     apache/certs \
     apache/logs \
     aider-workspace \
+    opencode-workspace \
     models \
     rag-service/documents \
     rag-service/data \
@@ -62,6 +63,7 @@ print(f'{username}:{encrypted}')
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
 podman build -t mcp-bridge:latest -f mcp-script/Dockerfile mcp-script
 podman build -t aider-service:latest -f aider/Dockerfile aider
+podman build -t opencode-service:latest -f opencode/Dockerfile opencode
 ```
 
 ### 2. Start Services
@@ -85,6 +87,7 @@ podman network create --internal isolated
 
 🌐 **Main UI**: https://localhost:8443/html/index.html
 🧑‍💻 **Aider UI**: https://localhost:8443/aider/
+🧑‍💻 **OpenCode UI**: https://localhost:9443/
 🔐 **Login**: `user` / `pass`
 
 ## 🏗️ Architecture
@@ -92,9 +95,11 @@ podman network create --internal isolated
 ```mermaid
 graph TB
     A[Client Browser] -->|HTTPS:8443| B[Apache HTTPD]
+    A -->|HTTPS:9443| B
     B -->|Proxy| C[llama.cpp Server]
     B -->|Proxy /rag/*| D[RAG Service]
     B -->|Proxy /aider/*| K[Aider Service]
+    B -->|Proxy :9443 /| L[OpenCode Service]
     C -->|Model Inference| E[GGUF Models]
     D -->|Embeddings| F[llama.cpp embedding-service]
     D -->|Reranking| G[llama.cpp rerank-service]
@@ -103,6 +108,7 @@ graph TB
     J[MCP Bridge] -->|chat| C
     J -->|Read-only SQL tools| I[PostgreSQL]
     K -->|OpenAI-compatible calls| C
+    L -->|OpenAI-compatible calls| C
     
     subgraph "Container Network"
         B
@@ -115,6 +121,7 @@ graph TB
         I
         J
         K
+        L
     end
 ```
 
@@ -171,7 +178,11 @@ llama-cpp-podman/
 ├── 💻 aider
 │   ├── Dockerfile            # Aider browser image
 │   └── entrypoint.sh
+├── 💻 opencode
+│   ├── Dockerfile            # OpenCode web image
+│   └── entrypoint.sh
 ├── aider-workspace/                  # Workspace mounted into aider-service at /workspace
+├── opencode-workspace/               # Workspace mounted into opencode-service at /workspace
 └── 📚 Documentation
     ├── README.md             # This file
     └── LICENSE
@@ -210,15 +221,17 @@ podman restart llama-cpp-server-deployment-pod-llama-cpp-server
 ```
 
 `scripts/monitor.sh` wraps the common `podman ps`, `podman logs -f`, and HTTPS health checks.
-Override defaults with `MONITOR_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASS` when needed.
+Override defaults with `MONITOR_BASE_URL`, `OPENCODE_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASS` when needed.
 
 ### kube.yaml integration
 
-[kube.yaml](kube.yaml) defines the full Podman kube stack, including the optional `postgresql` and `mcp-bridge` components, Apache, the RAG service, and `aider-service`.
+[kube.yaml](kube.yaml) defines the full Podman kube stack, including the optional `postgresql` and `mcp-bridge` components, Apache, the RAG service, `aider-service`, and `opencode-service`.
 Shared settings are in [config/model-config.yaml](config/model-config.yaml), local PostgreSQL credentials are read from `config/postgresql-credentials.yaml`, and `play-kube.sh` / `stop-kube.sh` stream those files together with `kube.yaml` into `podman play kube`.
 
 The `aider-service` container starts `aider --browser` automatically and is exposed through Apache at `https://localhost:8443/aider/`. It mounts [aider-workspace/](aider-workspace/) into `/workspace`, and its entrypoint will initialize a git repo there automatically when browser mode needs one. By default it reuses `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `LLM_MODEL` from the shared config map so it can talk to the in-cluster llama.cpp OpenAI-compatible endpoint.
 If you want `aider` to call a different OpenAI-compatible provider, override `AIDER_OPENAI_API_KEY`, `AIDER_OPENAI_API_BASE`, or `AIDER_MODEL`. If that provider is outside the isolated network, start the stack without `--network isolated` or relax the `aider-service` egress policy.
+
+The `opencode-service` container starts `opencode web` automatically and is exposed through Apache at `https://localhost:9443/`. It mounts [opencode-workspace/](opencode-workspace/) into `/workspace`, initializes a git repo when needed, and generates an OpenCode config from `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `LLM_MODEL`. OpenCode can run OS commands from its workspace, so add extra tools to [opencode/Dockerfile](opencode/Dockerfile) when a workflow needs them.
 
 - PostgreSQL initialization:
     - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
@@ -395,6 +408,7 @@ Use `./play-kube.sh` (see Quick Start).
 **5. Firewall Rules:**
 ```bash
 sudo ufw allow 8443/tcp   # HTTPS only
+sudo ufw allow 9443/tcp   # OpenCode HTTPS
 sudo ufw deny 8080/tcp    # Block HTTP
 sudo ufw deny 11434/tcp   # Block direct LLM access
 ```

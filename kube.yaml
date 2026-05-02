@@ -28,8 +28,8 @@ spec:
         args:
         - --model
         - /models/$(LLM_MODEL_NAME).gguf 
-        - --mmproj
-        - /models/$(MMPROJ_MODEL_NAME).gguf
+          #- --mmproj
+          #- /models/$(MMPROJ_MODEL_NAME).gguf
         - --port
         - "11434"
         - --host
@@ -458,6 +458,62 @@ spec:
           path: ./aider-workspace
           type: Directory
 ---
+# 9.5 opencode-service Deployment (web UI)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opencode-service-deployment
+  labels:
+    app: opencode-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opencode-service
+  template:
+    metadata:
+      labels:
+        app: opencode-service
+    spec:
+      containers:
+      - name: opencode-service
+        image: opencode-service:latest
+        stdin: true
+        tty: true
+        envFrom:
+        - configMapRef:
+            name: model-config
+        ports:
+        - containerPort: 4096
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: opencode-workspace
+          mountPath: /workspace
+      volumes:
+      - name: opencode-workspace
+        hostPath:
+          path: ./opencode-workspace
+          type: Directory
+---
+# 9.6 opencode-service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencode-service
+spec:
+  selector:
+    app: opencode-service
+  ports:
+  - protocol: TCP
+    port: 4096
+    targetPort: 4096
+---
 # 10. apache Deployment
 apiVersion: apps/v1
 kind: Deployment
@@ -488,6 +544,8 @@ spec:
           hostPort: 8080
         - containerPort: 443
           hostPort: 8443
+        - containerPort: 9443
+          hostPort: 9443
         resources:
           limits:
             memory: "512Mi"
@@ -555,6 +613,9 @@ spec:
       - podSelector:
           matchLabels:
             app: aider-service
+      - podSelector:
+          matchLabels:
+            app: opencode-service
       ports:
       - protocol: TCP
         port: 11434
@@ -683,6 +744,44 @@ spec:
       ports:
       - protocol: TCP
         port: 8501
+  egress:
+    # DNS
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    # llama-cpp-server
+    - to:
+      - podSelector:
+          matchLabels:
+            app: llama-cpp-server
+      ports:
+      - protocol: TCP
+        port: 11434
+---
+# 15. NetworkPolicy: opencode-service ingress from apache, egress to llama-cpp-server + DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opencode-service-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: opencode-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+      - podSelector:
+          matchLabels:
+            app: apache
+      ports:
+      - protocol: TCP
+        port: 4096
   egress:
     # DNS
     - to:

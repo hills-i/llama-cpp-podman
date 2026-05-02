@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
 BASE_URL="${MONITOR_BASE_URL:-https://localhost:8443}"
+OPENCODE_BASE_URL="${OPENCODE_BASE_URL:-https://localhost:9443}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-user}"
 BASIC_AUTH_PASS="${BASIC_AUTH_PASS:-pass}"
 
@@ -15,6 +16,7 @@ declare -A SERVICES=(
     [postgres]="postgresql-deployment-pod-postgresql"
     [mcp]="mcp-bridge-deployment-pod-mcp-bridge"
     [aider]="aider-service-deployment-pod-aider-service"
+    [opencode]="opencode-service-deployment-pod-opencode-service"
 )
 
 print_usage() {
@@ -27,12 +29,13 @@ Usage:
   ./$SCRIPT_NAME list
 
 Services:
-  llm, rag, embedding, rerank, apache, postgres, mcp, aider
+  llm, rag, embedding, rerank, apache, postgres, mcp, aider, opencode
 
 Environment variables:
-  MONITOR_BASE_URL   Default: $BASE_URL
-  BASIC_AUTH_USER    Default: $BASIC_AUTH_USER
-  BASIC_AUTH_PASS    Default: <hidden>
+  MONITOR_BASE_URL    Default: $BASE_URL
+  OPENCODE_BASE_URL   Default: $OPENCODE_BASE_URL
+  BASIC_AUTH_USER     Default: $BASIC_AUTH_USER
+  BASIC_AUTH_PASS     Default: <hidden>
 EOF
 }
 
@@ -102,11 +105,12 @@ show_health() {
     show_health_check "apache" "$BASE_URL/health" "$auth"
     show_health_check "rag" "$BASE_URL/rag/status" "$auth"
     show_health_check "aider" "$BASE_URL/aider/" "$auth"
+    show_health_check "opencode" "$OPENCODE_BASE_URL/" "$auth"
 }
 
 list_services() {
     local service_name
-    for service_name in llm rag embedding rerank apache postgres mcp aider; do
+    for service_name in llm rag embedding rerank apache postgres mcp aider opencode; do
         printf '%-10s %s\n' "$service_name" "${SERVICES[$service_name]}"
     done
 }

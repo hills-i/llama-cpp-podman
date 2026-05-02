@@ -38,6 +38,7 @@ Thumbs.db
 
 AGENTS.md
 CODE_REVIEW.md
+.codex
 .claude/
 CLAUDE.md
 README-test.md
@@ -55,3 +56,5 @@ postgres_password.txt
 .aider*
 aider-workspace/*
 !aider-workspace/.gitignore
+opencode-workspace/*
+!opencode-workspace/.gitignore
