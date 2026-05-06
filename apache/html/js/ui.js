@@ -140,13 +140,11 @@ function handleSubmit({
         try {
             const requestBody = {
                 model: model,
-                messages: [
-                    { role: 'user', content: prompt }
-                ],
-                max_tokens: 2000,
+                input: prompt,
+                max_output_tokens: 2000,
                 stream: true
             };
-            const response = await fetch('/v1/chat/completions', {
+            const response = await fetch('/v1/responses', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -163,7 +161,7 @@ function handleSubmit({
                 throw new Error('Streaming response is not available in this browser.');
             }
 
-            await readChatCompletionStream(response.body, (contentDelta) => {
+            await readResponsesStream(response.body, (contentDelta) => {
                 rawText += contentDelta;
                 renderResponse();
             });
@@ -189,7 +187,7 @@ function handleSubmit({
     };
 }
 
-async function readChatCompletionStream(body, onContentDelta) {
+async function readResponsesStream(body, onContentDelta) {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -203,7 +201,7 @@ async function readChatCompletionStream(body, onContentDelta) {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-            if (processChatCompletionStreamLine(line, onContentDelta)) {
+            if (processResponsesStreamLine(line, onContentDelta)) {
                 return;
             }
         }
@@ -214,14 +212,14 @@ async function readChatCompletionStream(body, onContentDelta) {
     if (buffer.trim()) {
         const lines = buffer.split(/\r?\n/);
         for (const line of lines) {
-            if (processChatCompletionStreamLine(line, onContentDelta)) {
+            if (processResponsesStreamLine(line, onContentDelta)) {
                 return;
             }
         }
     }
 }
 
-function processChatCompletionStreamLine(line, onContentDelta) {
+function processResponsesStreamLine(line, onContentDelta) {
     const trimmed = line.trim();
 
     if (!trimmed || trimmed.startsWith(':')) {
@@ -239,10 +237,15 @@ function processChatCompletionStreamLine(line, onContentDelta) {
     }
 
     const parsed = JSON.parse(data);
-    const contentDelta = parsed?.choices?.[0]?.delta?.content ?? '';
 
-    if (contentDelta) {
-        onContentDelta(contentDelta);
+    if (parsed?.type === 'response.output_text.delta' && parsed.delta) {
+        onContentDelta(parsed.delta);
+    } else if (parsed?.type === 'response.completed') {
+        return true;
+    } else if (parsed?.type === 'response.failed') {
+        throw new Error(parsed.response?.error?.message || 'Responses API stream failed.');
+    } else if (parsed?.type === 'error') {
+        throw new Error(parsed.error?.message || 'Responses API stream failed.');
     }
 
     return false;

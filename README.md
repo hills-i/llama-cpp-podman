@@ -345,7 +345,12 @@ POST /completion
 Body: {"prompt": "Explain AI", "max_tokens": 256}
 Response: {"content": "..."}
 
-# Chat Completion  
+# Browser UI generation (OpenAI Responses API)
+POST /v1/responses
+Body: {"model": "your-model-id", "input": "Hello", "max_output_tokens": 256, "stream": true}
+Response: streamed response.output_text.delta events
+
+# Chat Completion compatibility
 POST /v1/chat/completions
 Body: {"messages": [{"role": "user", "content": "Hello"}]}
 Response: {"choices": [...]}
