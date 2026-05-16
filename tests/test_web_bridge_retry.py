@@ -21,7 +21,6 @@ def _chat_request(module):
         message="hello",
         model=None,
         max_tokens=2000,
-        stream=False,
     )
 
 

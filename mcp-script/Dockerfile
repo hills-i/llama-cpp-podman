@@ -7,6 +7,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy scripts
+COPY bridge_core.py /app/bridge_core.py
 COPY bridge.py /app/bridge.py
 COPY pg_server.py /app/pg_server.py
 COPY web_bridge.py /app/web_bridge.py

@@ -14,12 +14,6 @@
 			margin-top: 6px;
 		}
 
-		.endpoint-row {
-			display: grid;
-			grid-template-columns: 1fr;
-			gap: 8px;
-		}
-
 		.pill {
 			display: inline-block;
 			padding: 2px 8px;
@@ -117,7 +111,15 @@
 				return trace.some((item) => item?.ok === false);
 			}
 
+			let activeController = null;
+			const originalSubmitText = submitBtn.textContent;
+
 			async function submit() {
+				if (activeController) {
+					activeController.abort();
+					return;
+				}
+
 				const model = (modelSelect && modelSelect.value) ? modelSelect.value : '';
 				const message = promptInput.value.trim();
 
@@ -133,20 +135,25 @@
 				toolTraceDiv.classList.add('hidden');
 				toolTraceDiv.classList.remove('trace-error');
 				copyBtn.classList.add('hidden');
-				submitBtn.disabled = true;
+				submitBtn.disabled = false;
+				submitBtn.textContent = 'Stop';
+				submitBtn.classList.add('btn-stop');
+
+				const controller = new AbortController();
+				activeController = controller;
 
 				try {
 					const requestBody = {
 						model: model,
 						message: message,
-						max_tokens: 2000,
-						stream: false
+						max_tokens: 2000
 					};
 
 					const resp = await fetch('/mcp/chat', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify(requestBody)
+						body: JSON.stringify(requestBody),
+						signal: controller.signal
 					});
 
 					const data = await resp.json().catch(() => ({}));
@@ -165,11 +172,15 @@
 						toolTraceDiv.textContent = JSON.stringify(data.tool_trace, null, 2);
 					}
 				} catch (e) {
-					responseDiv.textContent = `Error: ${e.message}`;
-					responseDiv.classList.add('error-text');
+					if (e.name !== 'AbortError') {
+						responseDiv.textContent = `Error: ${e.message}`;
+						responseDiv.classList.add('error-text');
+					}
 				} finally {
+					activeController = null;
 					loadingDiv.classList.add('hidden');
-					submitBtn.disabled = false;
+					submitBtn.textContent = originalSubmitText;
+					submitBtn.classList.remove('btn-stop');
 				}
 			}
 
