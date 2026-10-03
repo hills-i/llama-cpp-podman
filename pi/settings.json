@@ -1,0 +1,4 @@
+{
+  "defaultProvider": "llamacpp",
+  "defaultModel": "local-model"
+}

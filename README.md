@@ -170,7 +170,8 @@ llama-cpp-podman/
 │   └── postgresql-data/      # Postgres persistent data (hostPath)
 ├── 💻 pi
 │   ├── Dockerfile            # Pi coding agent image
-│   └── models.json           # Fixed local llama.cpp provider/model
+│   ├── models.json           # Fixed local llama.cpp provider/model
+│   └── settings.json         # Default provider/model (llamacpp/local-model)
 ├── pi-workspace/                     # Workspace mounted into pi-service at /workspace
 ├── pi-sessions/                      # Persistent Pi sessions
 └── 📚 Documentation
@@ -219,13 +220,13 @@ Override defaults with `MONITOR_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PA
 [kube.yaml](kube.yaml) defines the full Podman kube stack, including the optional `postgresql` and `mcp-bridge` components, Apache, the RAG service, and `pi-service`.
 Shared settings are in [config/model-config.yaml](config/model-config.yaml), local PostgreSQL credentials are read from `config/postgresql-credentials.yaml`, and `play-kube.sh` / `stop-kube.sh` stream those files together with `kube.yaml` into `podman play kube`.
 
-The `pi-service` container installs the Pi coding agent and keeps an interactive TTY available for `podman exec`. It mounts [pi-workspace/](pi-workspace/) into `/workspace`, persists conversations in [pi-sessions/](pi-sessions/), and registers the in-cluster llama.cpp server as the fixed `llamacpp/local-model` entry defined in [pi/models.json](pi/models.json). Start a Pi session with:
+The `pi-service` container installs a pinned version of the Pi coding agent (`PI_VERSION` in [pi/Dockerfile](pi/Dockerfile)) and stays idle so you can start Pi with `podman exec`. It mounts [pi-workspace/](pi-workspace/) into `/workspace`, persists conversations in [pi-sessions/](pi-sessions/), and registers the in-cluster llama.cpp server as the fixed `llamacpp/local-model` entry defined in [pi/models.json](pi/models.json). Start a Pi session with:
 
 ```bash
 podman exec -it pi-service-deployment-pod-pi-service pi
 ```
 
-Inside Pi, use `/model` to select `llamacpp/local-model`. Rebuild `pi-service` after changing [pi/Dockerfile](pi/Dockerfile) or [pi/models.json](pi/models.json).
+`llamacpp/local-model` is selected by default via [pi/settings.json](pi/settings.json). The model id is the `--alias` of `llama-cpp-server` in [kube.yaml](kube.yaml), so keep it in sync with `LLM_MODEL` in `config/model-config.yaml`. Rebuild `pi-service` after changing [pi/Dockerfile](pi/Dockerfile), [pi/models.json](pi/models.json), or [pi/settings.json](pi/settings.json).
 
 - PostgreSQL initialization:
     - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
@@ -396,6 +397,8 @@ Wildcard with credentials is never allowed. Omit the variable to keep CORS disab
 
 **4. Network Isolation:**
 Use `./play-kube.sh` (see Quick Start).
+
+> **Note:** The `NetworkPolicy` objects in [kube.yaml](kube.yaml) are only enforced on Kubernetes. `podman kube play` ignores them, so under Podman the `--internal` network blocks internet access but does not restrict traffic between pods. For example, the Pi agent's shell in `pi-service` can reach `rag-service` and `postgresql` directly.
 
 **5. Firewall Rules:**
 ```bash

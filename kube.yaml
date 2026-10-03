@@ -1,6 +1,9 @@
 # Runtime Config:
 # - Settings live in config/model-config.yaml
 # - Local PostgreSQL credentials live in config/postgresql-credentials.yaml
+# - NetworkPolicy objects are only enforced on Kubernetes. `podman kube play`
+#   ignores them ("Kube kind NetworkPolicy not supported"); under Podman the only
+#   isolation is `--network isolated` (no internet, but all pods can reach each other).
 #
 # 1. llama-cpp-server Deployment
 apiVersion: apps/v1
@@ -37,7 +40,7 @@ spec:
         - --host
         - 0.0.0.0
         - -n
-        - "32768"
+        - "16384"
         - -c
         - "32768"
         - -np
@@ -452,8 +455,6 @@ spec:
         - sleep
         args:
         - infinity
-        stdin: true
-        tty: true
         envFrom:
         - configMapRef:
             name: model-config
@@ -684,7 +685,7 @@ spec:
         port: 8080
 
 ---
-# 14. NetworkPolicy: pi-service egress to llama-cpp-server + DNS
+# 14. NetworkPolicy: pi-service deny all ingress, egress to llama-cpp-server + DNS
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -694,6 +695,7 @@ spec:
     matchLabels:
       app: pi-service
   policyTypes:
+    - Ingress
     - Egress
   egress:
     # DNS
