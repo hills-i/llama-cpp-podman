@@ -54,8 +54,8 @@ init.template.sh
 init.sql
 postgres_password.txt
 *-kube.yaml
-.aider*
-aider-workspace/*
-!aider-workspace/.gitignore
-opencode-workspace/*
-!opencode-workspace/.gitignore
+pi-workspace/*
+!pi-workspace/.gitignore
+pi-sessions/*
+!pi-sessions/.gitignore
+/pi/pi/

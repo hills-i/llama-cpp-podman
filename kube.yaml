@@ -27,7 +27,9 @@ spec:
             name: model-config
         args:
         - --model
-        - /models/$(LLM_MODEL_NAME).gguf 
+        - /models/$(LLM_MODEL_NAME).gguf
+        - --alias
+        - local-model
           #- --mmproj
           #- /models/$(MMPROJ_MODEL_NAME).gguf
         - --port
@@ -35,7 +37,7 @@ spec:
         - --host
         - 0.0.0.0
         - -n
-        - "16384"
+        - "32768"
         - -c
         - "32768"
         - -np
@@ -44,8 +46,14 @@ spec:
         - "1.0"
         - --top-p
         - "0.95"
+        - --top-k
+        - "20"
         - --min-p
         - "0.01"
+        - --repeat-penalty
+        - "1.0"
+        - --presence-penalty
+        - "1.5"
         - -sps
         - "0.5"
         - --cache-reuse
@@ -57,8 +65,13 @@ spec:
         - "q8_0"
         - -fa
         - 'auto'
-        - --chat-template-kwargs
-        - "{\"enable_thinking\": false}"
+        - --jinja
+        - --reasoning
+        - 'off'
+          #- --spec-type
+          #- 'draft-mtp'
+          #- --spec-draft-n-max
+          #- "2"
 
        # --- CORRECTED LIVENESS PROBE ---
         livenessProbe:
@@ -267,7 +280,7 @@ spec:
         - containerPort: 8080
         resources:
           limits:
-            memory: "2Gi"
+            memory: "4Gi"
             cpu: "2000m"
           requests:
             memory: "1Gi"
@@ -415,33 +428,35 @@ spec:
               name: postgresql-credentials
               key: PG_PASSWORD
 ---
-# 9. aider-service Deployment (browser UI)
+# 9. pi-service Deployment (interactive CLI)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: aider-service-deployment
+  name: pi-service-deployment
   labels:
-    app: aider-service
+    app: pi-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: aider-service
+      app: pi-service
   template:
     metadata:
       labels:
-        app: aider-service
+        app: pi-service
     spec:
       containers:
-      - name: aider-service
-        image: aider-service:latest
+      - name: pi-service
+        image: pi-service:latest
+        command:
+        - sleep
+        args:
+        - infinity
         stdin: true
         tty: true
         envFrom:
         - configMapRef:
             name: model-config
-        ports:
-        - containerPort: 8501
         resources:
           limits:
             memory: "1Gi"
@@ -450,69 +465,19 @@ spec:
             memory: "256Mi"
             cpu: "100m"
         volumeMounts:
-        - name: repo-workspace
+        - name: pi-workspace
           mountPath: /workspace
+        - name: pi-sessions
+          mountPath: /root/.pi/agent/sessions
       volumes:
-      - name: repo-workspace
+      - name: pi-workspace
         hostPath:
-          path: ./aider-workspace
+          path: ./pi-workspace
           type: Directory
----
-# 9.5 opencode-service Deployment (web UI)
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: opencode-service-deployment
-  labels:
-    app: opencode-service
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: opencode-service
-  template:
-    metadata:
-      labels:
-        app: opencode-service
-    spec:
-      containers:
-      - name: opencode-service
-        image: opencode-service:latest
-        stdin: true
-        tty: true
-        envFrom:
-        - configMapRef:
-            name: model-config
-        ports:
-        - containerPort: 4096
-        resources:
-          limits:
-            memory: "1Gi"
-            cpu: "1000m"
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-        volumeMounts:
-        - name: opencode-workspace
-          mountPath: /workspace
-      volumes:
-      - name: opencode-workspace
+      - name: pi-sessions
         hostPath:
-          path: ./opencode-workspace
+          path: ./pi-sessions
           type: Directory
----
-# 9.6 opencode-service Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: opencode-service
-spec:
-  selector:
-    app: opencode-service
-  ports:
-  - protocol: TCP
-    port: 4096
-    targetPort: 4096
 ---
 # 10. apache Deployment
 apiVersion: apps/v1
@@ -544,8 +509,6 @@ spec:
           hostPort: 8080
         - containerPort: 443
           hostPort: 8443
-        - containerPort: 9443
-          hostPort: 9443
         resources:
           limits:
             memory: "512Mi"
@@ -612,10 +575,7 @@ spec:
             app: mcp-bridge
       - podSelector:
           matchLabels:
-            app: aider-service
-      - podSelector:
-          matchLabels:
-            app: opencode-service
+            app: pi-service
       ports:
       - protocol: TCP
         port: 11434
@@ -724,64 +684,17 @@ spec:
         port: 8080
 
 ---
-# 14. NetworkPolicy: aider-service ingress from apache, egress to llama-cpp-server + DNS
+# 14. NetworkPolicy: pi-service egress to llama-cpp-server + DNS
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: aider-service-network-policy
+  name: pi-service-network-policy
 spec:
   podSelector:
     matchLabels:
-      app: aider-service
+      app: pi-service
   policyTypes:
-    - Ingress
     - Egress
-  ingress:
-    - from:
-      - podSelector:
-          matchLabels:
-            app: apache
-      ports:
-      - protocol: TCP
-        port: 8501
-  egress:
-    # DNS
-    - to:
-      - namespaceSelector: {}
-      ports:
-      - protocol: UDP
-        port: 53
-      - protocol: TCP
-        port: 53
-    # llama-cpp-server
-    - to:
-      - podSelector:
-          matchLabels:
-            app: llama-cpp-server
-      ports:
-      - protocol: TCP
-        port: 11434
----
-# 15. NetworkPolicy: opencode-service ingress from apache, egress to llama-cpp-server + DNS
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: opencode-service-network-policy
-spec:
-  podSelector:
-    matchLabels:
-      app: opencode-service
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-      - podSelector:
-          matchLabels:
-            app: apache
-      ports:
-      - protocol: TCP
-        port: 4096
   egress:
     # DNS
     - to:

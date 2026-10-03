@@ -1,6 +1,6 @@
 # 🦙 llama.cpp on Podman
 
-A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Includes Apache HTTPD reverse proxy, ChromaDB vector store, browser-based `aider` and OpenCode workspaces, and an optional **MCP bridge** for safe, read-only PostgreSQL tools.
+A production-ready containerized setup for running **llama.cpp inference server** with **Retrieval-Augmented Generation (RAG)** capabilities. Includes Apache HTTPD reverse proxy, ChromaDB vector store, an interactive Pi coding agent workspace, and an optional **MCP bridge** for safe, read-only PostgreSQL tools.
 
 ## ✨ Features
 
@@ -10,7 +10,7 @@ A production-ready containerized setup for running **llama.cpp inference server*
 - 🐳 **Containers** with a Podman kube stack
 - 📁 **Multi-Format Support** for PDF, DOCX, TXT, and JSON documents
 - 🧩 **MCP Bridge (optional)**: local-only, read-only PostgreSQL tools for the model
-- 💻 **Browser Coding Workspaces** with `aider --browser` and OpenCode Web
+- 💻 **Coding Workspace** with Pi
 
 ## 🚀 Quick Start
 
@@ -25,8 +25,8 @@ cp config/postgresql-credentials.yaml.example config/postgresql-credentials.yaml
 mkdir -p \
     apache/certs \
     apache/logs \
-    aider-workspace \
-    opencode-workspace \
+    pi-workspace \
+    pi-sessions \
     models \
     rag-service/documents \
     rag-service/data \
@@ -62,8 +62,7 @@ print(f'{username}:{encrypted}')
 # Build local images used by kube.yaml
 podman build -t rag-service:latest -f rag-service/Dockerfile rag-service
 podman build -t mcp-bridge:latest -f mcp-script/Dockerfile mcp-script
-podman build -t aider-service:latest -f aider/Dockerfile aider
-podman build -t opencode-service:latest -f opencode/Dockerfile opencode
+podman build -t pi-service:latest -f pi/Dockerfile pi
 ```
 
 ### 2. Start Services
@@ -86,8 +85,7 @@ podman network create --internal isolated
 ### 3. Access Web Interface
 
 🌐 **Main UI**: https://localhost:8443/html/index.html
-🧑‍💻 **Aider UI**: https://localhost:8443/aider/
-🧑‍💻 **OpenCode UI**: https://localhost:9443/
+🧑‍💻 **Pi CLI**: `podman exec -it pi-service-deployment-pod-pi-service pi`
 🔐 **Login**: `user` / `pass`
 
 ## 🏗️ Architecture
@@ -95,11 +93,9 @@ podman network create --internal isolated
 ```mermaid
 graph TB
     A[Client Browser] -->|HTTPS:8443| B[Apache HTTPD]
-    A -->|HTTPS:9443| B
     B -->|Proxy| C[llama.cpp Server]
     B -->|Proxy /rag/*| D[RAG Service]
-    B -->|Proxy /aider/*| K[Aider Service]
-    B -->|Proxy :9443 /| L[OpenCode Service]
+    M[Pi coding agent] -->|OpenAI-compatible API| C
     C -->|Model Inference| E[GGUF Models]
     D -->|Embeddings| F[llama.cpp embedding-service]
     D -->|Reranking| G[llama.cpp rerank-service]
@@ -107,9 +103,7 @@ graph TB
     D -->|LLM Calls| C
     J[MCP Bridge] -->|chat| C
     J -->|Read-only SQL tools| I[PostgreSQL]
-    K -->|OpenAI-compatible calls| C
-    L -->|OpenAI-compatible calls| C
-    
+
     subgraph "Container Network"
         B
         C
@@ -120,8 +114,7 @@ graph TB
         H
         I
         J
-        K
-        L
+        M
     end
 ```
 
@@ -175,14 +168,11 @@ llama-cpp-podman/
 │   ├── pg_server.py          # MCP server exposing read-only PG tools
 │   ├── postgresql/init.sql   # Example schema/data loaded on first init
 │   └── postgresql-data/      # Postgres persistent data (hostPath)
-├── 💻 aider
-│   ├── Dockerfile            # Aider browser image
-│   └── entrypoint.sh
-├── 💻 opencode
-│   ├── Dockerfile            # OpenCode web image
-│   └── entrypoint.sh
-├── aider-workspace/                  # Workspace mounted into aider-service at /workspace
-├── opencode-workspace/               # Workspace mounted into opencode-service at /workspace
+├── 💻 pi
+│   ├── Dockerfile            # Pi coding agent image
+│   └── models.json           # Fixed local llama.cpp provider/model
+├── pi-workspace/                     # Workspace mounted into pi-service at /workspace
+├── pi-sessions/                      # Persistent Pi sessions
 └── 📚 Documentation
     ├── README.md             # This file
     └── LICENSE
@@ -199,6 +189,7 @@ llama-cpp-podman/
 # Restart specific service
 podman restart rag-service-deployment-pod-rag-service
 podman restart llama-cpp-server-deployment-pod-llama-cpp-server
+podman restart pi-service-deployment-pod-pi-service
 ```
 
 ### Monitoring and Logs
@@ -221,17 +212,20 @@ podman restart llama-cpp-server-deployment-pod-llama-cpp-server
 ```
 
 `scripts/monitor.sh` wraps the common `podman ps`, `podman logs -f`, and HTTPS health checks.
-Override defaults with `MONITOR_BASE_URL`, `OPENCODE_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASS` when needed.
+Override defaults with `MONITOR_BASE_URL`, `BASIC_AUTH_USER`, and `BASIC_AUTH_PASS` when needed.
 
 ### kube.yaml integration
 
-[kube.yaml](kube.yaml) defines the full Podman kube stack, including the optional `postgresql` and `mcp-bridge` components, Apache, the RAG service, `aider-service`, and `opencode-service`.
+[kube.yaml](kube.yaml) defines the full Podman kube stack, including the optional `postgresql` and `mcp-bridge` components, Apache, the RAG service, and `pi-service`.
 Shared settings are in [config/model-config.yaml](config/model-config.yaml), local PostgreSQL credentials are read from `config/postgresql-credentials.yaml`, and `play-kube.sh` / `stop-kube.sh` stream those files together with `kube.yaml` into `podman play kube`.
 
-The `aider-service` container starts `aider --browser` automatically and is exposed through Apache at `https://localhost:8443/aider/`. It mounts [aider-workspace/](aider-workspace/) into `/workspace`, and its entrypoint will initialize a git repo there automatically when browser mode needs one. By default it reuses `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `LLM_MODEL` from the shared config map so it can talk to the in-cluster llama.cpp OpenAI-compatible endpoint.
-If you want `aider` to call a different OpenAI-compatible provider, override `AIDER_OPENAI_API_KEY`, `AIDER_OPENAI_API_BASE`, or `AIDER_MODEL`. If that provider is outside the isolated network, start the stack without `--network isolated` or relax the `aider-service` egress policy.
+The `pi-service` container installs the Pi coding agent and keeps an interactive TTY available for `podman exec`. It mounts [pi-workspace/](pi-workspace/) into `/workspace`, persists conversations in [pi-sessions/](pi-sessions/), and registers the in-cluster llama.cpp server as the fixed `llamacpp/local-model` entry defined in [pi/models.json](pi/models.json). Start a Pi session with:
 
-The `opencode-service` container starts `opencode web` automatically and is exposed through Apache at `https://localhost:9443/`. It mounts [opencode-workspace/](opencode-workspace/) into `/workspace`, initializes a git repo when needed, and generates an OpenCode config from `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `LLM_MODEL`. OpenCode can run OS commands from its workspace, so add extra tools to [opencode/Dockerfile](opencode/Dockerfile) when a workflow needs them.
+```bash
+podman exec -it pi-service-deployment-pod-pi-service pi
+```
+
+Inside Pi, use `/model` to select `llamacpp/local-model`. Rebuild `pi-service` after changing [pi/Dockerfile](pi/Dockerfile) or [pi/models.json](pi/models.json).
 
 - PostgreSQL initialization:
     - [mcp-script/postgresql/init.sql](mcp-script/postgresql/init.sql) is mounted into `/docker-entrypoint-initdb.d/00-init.sql`.
@@ -263,17 +257,10 @@ The RAG service uses these key environment variables (see `config/model-config.y
 The MCP bridge uses these key environment variables (see `config/model-config.yaml`; for host runs, see [mcp-script/.env.template](mcp-script/.env.template)):
 
 - `LLM_BASE_URL` (example in-cluster: `http://llama-cpp-server:11434/v1`)
-- `OPENAI_API_BASE` (alias for OpenAI-compatible clients like `aider`)
+- `OPENAI_API_BASE` (OpenAI-compatible API base URL)
 - `LLM_MODEL` (model id from `GET /v1/models`)
 - `OPENAI_API_KEY` (use `local` for llama.cpp)
 - `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD` (or use `PG_DSN` when running on the host)
-
-The browser-based `aider-service` also honors these overrides:
-
-- `AIDER_OPENAI_API_KEY`
-- `AIDER_OPENAI_API_BASE`
-- `AIDER_MODEL`
-- `AIDER_EXTRA_ARGS`
 
 ## 🧠 RAG System Deep Dive
 
@@ -413,7 +400,6 @@ Use `./play-kube.sh` (see Quick Start).
 **5. Firewall Rules:**
 ```bash
 sudo ufw allow 8443/tcp   # HTTPS only
-sudo ufw allow 9443/tcp   # OpenCode HTTPS
 sudo ufw deny 8080/tcp    # Block HTTP
 sudo ufw deny 11434/tcp   # Block direct LLM access
 ```
