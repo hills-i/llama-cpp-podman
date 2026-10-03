@@ -24,6 +24,7 @@ rag-service/.venv*
 *~
 *.bk
 __pycache__/
+.pytest_cache/
 
 # OS generated files
 .DS_Store
@@ -48,6 +49,7 @@ SECURITY_FIXES_SUMMARY.md
 SYSTEM_STATE.md
 rag-service/README-RAG.md
 mcp-script/README-MCP.md
+mcp-script/postgresql-data/
 
 init.sh
 init.template.sh
@@ -61,3 +63,4 @@ pi-sessions/*
 /pi/pi/
 
 chat_templates/
+
